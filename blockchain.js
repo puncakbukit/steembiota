@@ -151,11 +151,13 @@ function keychainLogin(username, callback) {
 
 // ---- SteemBiota — publish a creature to the blockchain ----
 //
-// genome       : object produced by generateGenome()
-// unicodeArt   : string produced by buildUnicodeArt()
-// creatureName : string produced by generateFullName()
-// callback     : (response) => { response.success, response.message }
-function publishCreature(username, genome, unicodeArt, creatureName, callback) {
+// genome          : object produced by generateGenome()
+// unicodeArt      : string produced by buildUnicodeArt()
+// creatureName    : string produced by generateFullName()
+// age             : number — days since creation (calculateAge)
+// lifecycleStage  : string — "Juvenile" | "Fertile Adult" | "Elder" | "Fossil"
+// callback        : (response) => { response.success, response.message }
+function publishCreature(username, genome, unicodeArt, creatureName, age, lifecycleStage, callback) {
   const permlink = buildPermlink("steembiota-" + creatureName.toLowerCase());
   const title    = `❇ ${creatureName} (Founder)`;
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
@@ -163,8 +165,12 @@ function publishCreature(username, genome, unicodeArt, creatureName, callback) {
   const body =
     `## ❇ ${creatureName}\n\n` +
     `**Sex:** ${sexLabel}  \n` +
+    `**Age:** ${age} day${age === 1 ? "" : "s"}  \n` +
+    `**Status:** ${lifecycleStage}  \n` +
     `**Genus ID:** ${genome.GEN}  \n` +
-    `**Hue:** ${genome.CLR}°  \n\n` +
+    `**Hue:** ${genome.CLR}°  \n` +
+    `**Lifespan:** ${genome.LIF} days  \n` +
+    `**Fertile:** Day ${genome.FRT_START}–${genome.FRT_END}  \n\n` +
     `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
     `**Genome:** \`${JSON.stringify(genome)}\`\n\n` +
     `*Published via [SteemBiota — Immutable Evolution]*`;
@@ -176,6 +182,8 @@ function publishCreature(username, genome, unicodeArt, creatureName, callback) {
       version: "1.0",
       genome,
       name: creatureName,
+      age,
+      lifecycleStage,
       type: "founder"
     }
   };

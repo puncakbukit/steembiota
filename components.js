@@ -165,32 +165,37 @@ const UserProfileComponent = {
 
 // ---- CreatureCanvasComponent ----
 // Renders the genome visually onto a <canvas> element.
-// Pass :genome (object) to trigger a re-render.
+// :genome (object) — triggers re-render on change.
+// :fossil (bool)   — desaturated, dimmed rendering when true.
 const CreatureCanvasComponent = {
   name: "CreatureCanvasComponent",
   props: {
-    genome: { type: Object, default: null }
+    genome: { type: Object,  default: null  },
+    fossil: { type: Boolean, default: false }
   },
   watch: {
-    genome(val) {
-      if (val) this.$nextTick(() => this.draw(val));
-    }
+    genome(val) { if (val) this.$nextTick(() => this.draw(val, this.fossil)); },
+    fossil(val) { if (this.genome) this.$nextTick(() => this.draw(this.genome, val)); }
   },
   mounted() {
-    if (this.genome) this.draw(this.genome);
+    if (this.genome) this.draw(this.genome, this.fossil);
   },
   methods: {
-    draw(genome) {
+    draw(genome, fossil) {
       const canvas = this.$refs.canvas;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, 300, 300);
 
-      const baseHue = (genome.GEN * 137.508) % 360;
-      const hue     = (baseHue + genome.CLR) % 360;
+      const baseHue  = (genome.GEN * 137.508) % 360;
+      const hue      = (baseHue + genome.CLR) % 360;
+      const sat      = fossil ? 10  : 70;   // desaturate when fossilised
+      const light    = fossil ? 30  : 50;   // dim when fossilised
+      const alpha    = fossil ? 0.4 : 1.0;
 
-      ctx.fillStyle   = `hsl(${hue}, 70%, 50%)`;
-      ctx.strokeStyle = `hsl(${hue}, 70%, 30%)`;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle   = `hsl(${hue}, ${sat}%, ${light}%)`;
+      ctx.strokeStyle = `hsl(${hue}, ${sat}%, ${Math.max(light - 20, 10)}%)`;
       ctx.lineWidth   = 3;
 
       ctx.beginPath();
@@ -198,12 +203,16 @@ const CreatureCanvasComponent = {
       ctx.fill();
       ctx.stroke();
 
-      // Eyes
-      ctx.fillStyle = "#000";
-      ctx.beginPath();
-      ctx.arc(130, 140, 8, 0, Math.PI * 2);
-      ctx.arc(170, 140, 8, 0, Math.PI * 2);
-      ctx.fill();
+      // Eyes — hidden on fossil
+      if (!fossil) {
+        ctx.fillStyle = "#000";
+        ctx.beginPath();
+        ctx.arc(130, 140, 8, 0, Math.PI * 2);
+        ctx.arc(170, 140, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1.0;
     }
   },
   template: `

@@ -60,9 +60,40 @@ function generateFullName(genome) {
 }
 
 // ============================================================
+// STEEMBIOTA AGING SYSTEM (deterministic from block timestamp)
+// ============================================================
 
-function buildUnicodeArt(genome) {
+// Returns age in whole days from a Steem post.created timestamp.
+function calculateAge(birthTimestamp) {
+  const now   = new Date();
+  const birth = new Date(
+    typeof birthTimestamp === "string" && !birthTimestamp.endsWith("Z")
+      ? birthTimestamp + "Z"
+      : birthTimestamp
+  );
+  const diffSeconds = (now - birth) / 1000;
+  return Math.floor(diffSeconds / 86400);
+}
+
+// Derive lifecycle stage from age and genome.
+// Returns: "Juvenile" | "Fertile Adult" | "Elder" | "Fossil"
+function getLifecycleStage(age, genome) {
+  if (age >= genome.LIF)       return "Fossil";
+  if (age >= genome.FRT_END)   return "Elder";
+  if (age >= genome.FRT_START) return "Fertile Adult";
+  return "Juvenile";
+}
+
+function isFossil(age, genome) {
+  return age >= genome.LIF;
+}
+
+// ============================================================
+
+// fossil = true → sparse, faded rune density for dead creatures
+function buildUnicodeArt(genome, fossil = false) {
   const rune = ["✶", "▲", "▣", "⊕", "☼", "✜", "⟁", "❂"][genome.GEN % 8];
+  const deadRune = "·";
   let grid = "";
   for (let y = 0; y < 15; y++) {
     for (let x = 0; x < 25; x++) {
@@ -70,7 +101,12 @@ function buildUnicodeArt(genome) {
       const dy   = y - 7;
       const body = (dx * dx) / 60 + (dy * dy) / 20 < 1;
       if (body) {
-        grid += (y === 6 && (x === 9 || x === 15)) ? "◉" : rune;
+        if (fossil) {
+          // Sparse fossil: keep only every 3rd body cell as a faded dot
+          grid += ((x + y) % 3 === 0) ? deadRune : " ";
+        } else {
+          grid += (y === 6 && (x === 9 || x === 15)) ? "◉" : rune;
+        }
       } else {
         grid += " ";
       }
@@ -95,10 +131,19 @@ const HomeView = {
   },
   data() {
     return {
-      genome:      null,
-      unicodeArt:  "",
-      publishing:  false
+      genome:         null,
+      unicodeArt:     "",
+      publishing:     false,
+      birthTimestamp: null,   // set at creation time; mimics post.created
+      now:            new Date()
     };
+  },
+  created() {
+    // Tick every minute so age display stays current
+    this._ageTicker = setInterval(() => { this.now = new Date(); }, 60000);
+  },
+  beforeUnmount() {
+    clearInterval(this._ageTicker);
   },
   computed: {
     creatureName() {
@@ -106,12 +151,45 @@ const HomeView = {
     },
     sexLabel() {
       return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : "";
+    },
+    age() {
+      if (!this.birthTimestamp) return 0;
+      const diffSec = (this.now - new Date(this.birthTimestamp)) / 1000;
+      return Math.floor(diffSec / 86400);
+    },
+    lifecycleStage() {
+      return this.genome ? getLifecycleStage(this.age, this.genome) : null;
+    },
+    fossil() {
+      return this.genome ? isFossil(this.age, this.genome) : false;
+    },
+    lifecycleColor() {
+      switch (this.lifecycleStage) {
+        case "Fossil":        return "#666";
+        case "Elder":         return "#ffb74d";
+        case "Fertile Adult": return "#66bb6a";
+        default:              return "#90caf9";  // Juvenile
+      }
+    },
+    lifecycleIcon() {
+      switch (this.lifecycleStage) {
+        case "Fossil":        return "🦴";
+        case "Elder":         return "🍂";
+        case "Fertile Adult": return "🌸";
+        default:              return "🌱";
+      }
+    }
+  },
+  watch: {
+    fossil(isFossil) {
+      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, isFossil);
     }
   },
   methods: {
     createFounder() {
-      this.genome     = generateGenome();
-      this.unicodeArt = buildUnicodeArt(this.genome);
+      this.birthTimestamp = new Date().toISOString();
+      this.genome         = generateGenome();
+      this.unicodeArt     = buildUnicodeArt(this.genome, false);
     },
 
     async publishCreature() {
@@ -129,7 +207,7 @@ const HomeView = {
       }
 
       this.publishing = true;
-      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, (response) => {
+      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage, (response) => {
         this.publishing = false;
         if (response.success) {
           this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
@@ -147,15 +225,35 @@ const HomeView = {
       <button @click="createFounder">🌱 Create Founder Creature</button>
 
       <!-- Identity header -->
-      <div v-if="creatureName" style="margin:16px 0 4px;">
+      <div v-if="creatureName" style="margin:16px 0 6px;">
         <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
           ❇ {{ creatureName }}
         </div>
         <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
+
+        <!-- Age + lifecycle badge -->
+        <div style="margin-top:8px;display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
+          <span style="font-size:0.85rem;color:#aaa;">
+            Age: <strong style="color:#eee;">{{ age }} day{{ age === 1 ? '' : 's' }}</strong>
+          </span>
+          <span :style="{ fontSize: '0.82rem', fontWeight: 'bold', color: lifecycleColor, border: '1px solid ' + lifecycleColor, borderRadius: '12px', padding: '2px 10px' }">
+            {{ lifecycleIcon }} {{ lifecycleStage }}
+          </span>
+          <span style="font-size:0.8rem;color:#666;">
+            Lifespan: {{ genome.LIF }} days
+            &nbsp;·&nbsp;
+            Fertile: {{ genome.FRT_START }}–{{ genome.FRT_END }}
+          </span>
+        </div>
       </div>
 
-      <!-- Canvas render -->
-      <creature-canvas-component :genome="genome"></creature-canvas-component>
+      <!-- Canvas render (fossil = desaturated is handled inside component) -->
+      <creature-canvas-component :genome="genome" :fossil="fossil"></creature-canvas-component>
+
+      <!-- Fossil overlay label -->
+      <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
+        🦴 This creature has fossilised. Its genome is preserved on-chain.
+      </div>
 
       <!-- Genome table -->
       <div v-if="genome">
@@ -164,7 +262,7 @@ const HomeView = {
 
         <!-- Unicode art -->
         <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
-        <pre>{{ unicodeArt }}</pre>
+        <pre :style="fossil ? { color: '#444', opacity: '0.6' } : {}">{{ unicodeArt }}</pre>
 
         <!-- Publish button -->
         <br/>
