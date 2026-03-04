@@ -29,6 +29,38 @@ function generateGenome() {
   };
 }
 
+// ============================================================
+// STEEMBIOTA NAMING SYSTEM (deterministic from genome)
+// ============================================================
+
+const syllablesA = ["Lu", "Te", "Mo", "Va", "Zi", "Ra", "Ko", "Ny"];
+const syllablesB = ["mo", "ra", "vi", "to", "na", "shi", "ka", "re"];
+const syllablesC = ["ra", "nus", "tor", "lex", "via", "ron", "dus", "x"];
+
+const speciesA = ["Shavi", "Virel", "Morun", "Zerin", "Talin", "Korin", "Velis", "Nora"];
+const speciesB = ["Oua", "Tel", "Ka", "Pol", "Zen", "Ira", "Lux", "Tor"];
+
+function generateGenusName(GEN) {
+  const a = syllablesA[GEN % syllablesA.length];
+  const b = syllablesB[Math.floor(GEN / 3) % syllablesB.length];
+  const c = syllablesC[Math.floor(GEN / 7) % syllablesC.length];
+  return a + b + c;
+}
+
+function generateSpeciesName(MOR, ORN) {
+  const partA = speciesA[MOR % speciesA.length];
+  const partB = speciesB[ORN % speciesB.length];
+  return partA + " " + partB;
+}
+
+function generateFullName(genome) {
+  const genus   = generateGenusName(genome.GEN);
+  const species = generateSpeciesName(genome.MOR, genome.ORN);
+  return genus + " " + species;
+}
+
+// ============================================================
+
 function buildUnicodeArt(genome) {
   const rune = ["✶", "▲", "▣", "⊕", "☼", "✜", "⟁", "❂"][genome.GEN % 8];
   let grid = "";
@@ -68,6 +100,14 @@ const HomeView = {
       publishing:  false
     };
   },
+  computed: {
+    creatureName() {
+      return this.genome ? generateFullName(this.genome) : null;
+    },
+    sexLabel() {
+      return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : "";
+    }
+  },
   methods: {
     createFounder() {
       this.genome     = generateGenome();
@@ -89,10 +129,10 @@ const HomeView = {
       }
 
       this.publishing = true;
-      publishCreature(this.username, this.genome, this.unicodeArt, (response) => {
+      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, (response) => {
         this.publishing = false;
         if (response.success) {
-          this.notify("🌿 Creature published to the blockchain!", "success");
+          this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
         } else {
           this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
         }
@@ -105,6 +145,14 @@ const HomeView = {
 
       <!-- Create button -->
       <button @click="createFounder">🌱 Create Founder Creature</button>
+
+      <!-- Identity header -->
+      <div v-if="creatureName" style="margin:16px 0 4px;">
+        <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
+          ❇ {{ creatureName }}
+        </div>
+        <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
+      </div>
 
       <!-- Canvas render -->
       <creature-canvas-component :genome="genome"></creature-canvas-component>

@@ -151,15 +151,20 @@ function keychainLogin(username, callback) {
 
 // ---- SteemBiota — publish a creature to the blockchain ----
 //
-// genome     : object produced by generateGenome()
-// unicodeArt : string produced by renderUnicode()
-// callback   : (response) => { response.success, response.message }
-function publishCreature(username, genome, unicodeArt, callback) {
-  const permlink = buildPermlink("steembiota-founder");
-  const title    = "SteemBiota Founder Creature";
+// genome       : object produced by generateGenome()
+// unicodeArt   : string produced by buildUnicodeArt()
+// creatureName : string produced by generateFullName()
+// callback     : (response) => { response.success, response.message }
+function publishCreature(username, genome, unicodeArt, creatureName, callback) {
+  const permlink = buildPermlink("steembiota-" + creatureName.toLowerCase());
+  const title    = `❇ ${creatureName} (Founder)`;
+  const sexLabel = genome.SX === 0 ? "Male" : "Female";
 
   const body =
-    `## 🌿 SteemBiota Founder Creature\n\n` +
+    `## ❇ ${creatureName}\n\n` +
+    `**Sex:** ${sexLabel}  \n` +
+    `**Genus ID:** ${genome.GEN}  \n` +
+    `**Hue:** ${genome.CLR}°  \n\n` +
     `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
     `**Genome:** \`${JSON.stringify(genome)}\`\n\n` +
     `*Published via [SteemBiota — Immutable Evolution]*`;
@@ -170,6 +175,7 @@ function publishCreature(username, genome, unicodeArt, callback) {
     steembiota: {
       version: "1.0",
       genome,
+      name: creatureName,
       type: "founder"
     }
   };
