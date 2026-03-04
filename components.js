@@ -225,10 +225,10 @@ const GenomeTableComponent = {
     rows() {
       const g = this.genome;
       return [
-        { key: "Generation",        value: g.GEN },
+        { key: "Genus ID",           value: g.GEN },
         { key: "Sex",               value: this.sexLabel },
         { key: "Morphology",        value: g.MOR },
-        { key: "Appearance",        value: g.APP },
+        { key: "Appendage Seed",    value: g.APP },
         { key: "Ornamentation",     value: g.ORN },
         { key: "Colour (hue°)",     value: g.CLR },
         { key: "Lifespan",          value: g.LIF },
