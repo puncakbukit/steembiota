@@ -72,7 +72,7 @@ function calculateAge(birthTimestamp) {
       : birthTimestamp
   );
   const diffSeconds = (now - birth) / 1000;
-  return Math.floor(diffSeconds / 86400);
+  return Math.max(0, Math.floor(diffSeconds / 86400));
 }
 
 // Derive lifecycle stage from age and genome.
@@ -155,7 +155,7 @@ const HomeView = {
     age() {
       if (!this.birthTimestamp) return 0;
       const diffSec = (this.now - new Date(this.birthTimestamp)) / 1000;
-      return Math.floor(diffSec / 86400);
+      return Math.max(0, Math.floor(diffSec / 86400));
     },
     lifecycleStage() {
       return this.genome ? getLifecycleStage(this.age, this.genome) : null;
