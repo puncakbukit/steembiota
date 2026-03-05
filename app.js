@@ -75,13 +75,28 @@ function calculateAge(birthTimestamp) {
   return Math.max(0, Math.floor(diffSeconds / 86400));
 }
 
-// Derive lifecycle stage from age and genome.
-// Returns: "Juvenile" | "Fertile Adult" | "Elder" | "Fossil"
+// Lifecycle stages defined as percentage thresholds of LIF (lifespan).
+// Fossil is the post-death state beyond 100%.
+const LIFECYCLE_STAGES = [
+  { name: "Baby",        from: 0,    icon: "🥚", color: "#90caf9" },
+  { name: "Toddler",     from: 0.05, icon: "🐣", color: "#80deea" },
+  { name: "Child",       from: 0.12, icon: "🌿", color: "#a5d6a7" },
+  { name: "Teenager",    from: 0.25, icon: "🌱", color: "#66bb6a" },
+  { name: "Young Adult", from: 0.40, icon: "🌸", color: "#f48fb1" },
+  { name: "Middle-Aged", from: 0.60, icon: "🍃", color: "#ffb74d" },
+  { name: "Elder",       from: 0.80, icon: "🍂", color: "#ff8a65" },
+  // Sentinel — age >= LIF means Fossil
+  { name: "Fossil",      from: 1.00, icon: "🦴", color: "#666"    },
+];
+
+// Returns the full stage object for the creature's current age.
 function getLifecycleStage(age, genome) {
-  if (age >= genome.LIF)       return "Fossil";
-  if (age >= genome.FRT_END)   return "Elder";
-  if (age >= genome.FRT_START) return "Fertile Adult";
-  return "Juvenile";
+  const pct = age / genome.LIF;
+  // Walk backwards to find the highest threshold not exceeded
+  for (let i = LIFECYCLE_STAGES.length - 1; i >= 0; i--) {
+    if (pct >= LIFECYCLE_STAGES[i].from) return LIFECYCLE_STAGES[i];
+  }
+  return LIFECYCLE_STAGES[0];
 }
 
 function isFossil(age, genome) {
@@ -164,20 +179,10 @@ const HomeView = {
       return this.genome ? isFossil(this.age, this.genome) : false;
     },
     lifecycleColor() {
-      switch (this.lifecycleStage) {
-        case "Fossil":        return "#666";
-        case "Elder":         return "#ffb74d";
-        case "Fertile Adult": return "#66bb6a";
-        default:              return "#90caf9";  // Juvenile
-      }
+      return this.lifecycleStage ? this.lifecycleStage.color : "#888";
     },
     lifecycleIcon() {
-      switch (this.lifecycleStage) {
-        case "Fossil":        return "🦴";
-        case "Elder":         return "🍂";
-        case "Fertile Adult": return "🌸";
-        default:              return "🌱";
-      }
+      return this.lifecycleStage ? this.lifecycleStage.icon : "";
     }
   },
   watch: {
@@ -207,7 +212,7 @@ const HomeView = {
       }
 
       this.publishing = true;
-      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage, (response) => {
+      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, (response) => {
         this.publishing = false;
         if (response.success) {
           this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
@@ -237,7 +242,7 @@ const HomeView = {
             Age: <strong style="color:#eee;">{{ age }} day{{ age === 1 ? '' : 's' }}</strong>
           </span>
           <span :style="{ fontSize: '0.82rem', fontWeight: 'bold', color: lifecycleColor, border: '1px solid ' + lifecycleColor, borderRadius: '12px', padding: '2px 10px' }">
-            {{ lifecycleIcon }} {{ lifecycleStage }}
+            {{ lifecycleIcon }} {{ lifecycleStage.name }}
           </span>
           <span style="font-size:0.8rem;color:#666;">
             Lifespan: {{ genome.LIF }} days
