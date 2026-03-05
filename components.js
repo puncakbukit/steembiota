@@ -182,7 +182,7 @@ const CreatureCanvasComponent = {
   watch: {
     genome()      { this.$nextTick(() => this.draw()); },
     age()         { this.$nextTick(() => this.draw()); },
-    fossil()      { this.$nextTick(() => this.draw()); },
+    fossil()      { this.$nextTick(() => this.draw()); }
   },
   mounted() { this.draw(); },
   methods: {
@@ -549,8 +549,6 @@ const CreatureCanvasComponent = {
     }
   },
   template: `<canvas ref="canvas" width="300" height="300"></canvas>`
-};
-
 };
 
 // ---- GenomeTableComponent ----
