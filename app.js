@@ -193,10 +193,13 @@ function buildUnicodeArt(genome, age) {
     return centre(lChar + bodyFill(grid) + rChar);
   }
 
-  // Number of middle rows scales with grid so taller creatures fill vertically.
-  // Minimum 1 for Child+, grows every ~10 grid units.
-  function midRowCount() {
-    return Math.max(1, Math.floor(grid / 10));
+  // Count fixed structural rows for each stage so we know how many
+  // middle/fill rows are needed to reach exactly `grid` total rows.
+  // Baby:    sigil(1) + body(1)                          = 2 fixed → need grid-2 filler body rows
+  // Toddler: sigil(1) + upper(1)                         = 2 fixed → need grid-2 filler upper rows
+  // Child+:  [orn(1)?] + sigil(1) + upper(1) + lower(1) + tail(1) = 4-5 fixed → middle fills rest
+  function fillRows(fixedCount) {
+    return Math.max(1, grid - fixedCount);
   }
 
   const lines = [];
@@ -205,10 +208,12 @@ function buildUnicodeArt(genome, age) {
   if (fossil) {
     const fh   = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
     const side = "[" + bodyFill(grid) + "]";
-    const mid  = bodyFill(grid + 2);   // full width, no brackets
+    const mid  = bodyFill(grid + 2);
+    // fixed rows: head(1) + top-side(1) + bot-side(1) = 3
+    const midRows = fillRows(3);
     lines.push(centre(fh));
     lines.push(centre(side));
-    for (let i = 0; i < midRowCount(); i++) lines.push(centre(mid));
+    for (let i = 0; i < midRows; i++) lines.push(centre(mid));
     lines.push(centre(side));
     return lines.join("\n");
   }
@@ -226,20 +231,34 @@ function buildUnicodeArt(genome, age) {
     lines.push(centre(sigil + sex));
   }
 
-  // ---- BABY: sigil + solid body blob filling grid, no limbs ----
+  // ---- BABY: sigil + body rows filling grid vertically ----
   if (pct < 0.05) {
-    lines.push(centre(sigil));
-    lines.push(centre(bodyFill(grid)));
+    lines.push(centre(sigil));                    // 1 fixed header
+    const bodyRows = fillRows(1);
+    for (let i = 0; i < bodyRows; i++) {
+      lines.push(centre(bodyFill(grid)));
+    }
     return lines.join("\n");
   }
 
   // ---- UPPER LIMB ROW (Toddler+) ----
   lines.push(bodyLine(limL, limR));
 
-  // ---- MIDDLE BODY ROWS (Child+) ----
+  // ---- MIDDLE BODY ROWS: fills remaining space ----
+  // Fixed rows so far: [orn?](1) + sigil(1) + upper(1) = 3 or 2
+  // Still to add:      lower(1) + tail(1)               = 2  (Child+)
   if (pct >= 0.12) {
-    for (let i = 0; i < midRowCount(); i++) {
+    const fixedTotal = (pct >= 0.25 ? 1 : 0) + 1 + 1 + 1 + 1; // orn+sigil+upper+lower+tail
+    const midRows = fillRows(fixedTotal);
+    for (let i = 0; i < midRows; i++) {
       lines.push(bodyLine(limCL, limCR));
+    }
+  } else {
+    // Toddler: no lower/tail — fill with upper-style rows
+    const fixedTotal = 1 + 1; // sigil + upper already pushed
+    const midRows = fillRows(fixedTotal);
+    for (let i = 0; i < midRows; i++) {
+      lines.push(bodyLine(limL, limR));
     }
   }
 
