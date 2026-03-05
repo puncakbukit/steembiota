@@ -147,105 +147,110 @@ function unicodeGridSize(pct) {
 // genome : genome object
 // age    : integer days (0 = newborn)
 // Returns a multi-line string ready for <pre> display.
+//
+// The renderer fills the full grid width at every stage.
+// Grid is treated as the INTERIOR body width (in glyphs).
+// Limb chars flank the body; the whole thing is centred.
 function buildUnicodeArt(genome, age) {
   const pct    = Math.min(age / genome.LIF, 1.0);
   const fossil = pct >= 1.0;
   const grid   = unicodeGridSize(pct);
-  const half   = Math.floor(grid / 2);   // center column index
 
   // Pick glyph primitives from genome seeds
-  const sigil  = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
+  const sigil   = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
   const rawBody = fossil
     ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
     : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY)[genome.MOR % UNI_BODY.length];
-  const limL   = UNI_LIMB_L[genome.APP % UNI_LIMB_L.length];
-  const limR   = UNI_LIMB_R[genome.APP % UNI_LIMB_R.length];
-  const limCL  = UNI_LIMB_C[genome.APP % UNI_LIMB_C.length];
-  const limCR  = UNI_LIMB_D[genome.APP % UNI_LIMB_D.length];
-  const orn    = UNI_ORN   [genome.ORN % UNI_ORN.length];
-  const tail   = UNI_TAIL  [genome.MOR % UNI_TAIL.length];
-  const sex    = genome.SX === 0 ? "♂" : "♀";
+  const limL    = UNI_LIMB_L[genome.APP % UNI_LIMB_L.length];
+  const limR    = UNI_LIMB_R[genome.APP % UNI_LIMB_R.length];
+  const limCL   = UNI_LIMB_C[genome.APP % UNI_LIMB_C.length];
+  const limCR   = UNI_LIMB_D[genome.APP % UNI_LIMB_D.length];
+  const orn     = UNI_ORN   [genome.ORN % UNI_ORN.length];
+  const tail    = UNI_TAIL  [genome.MOR % UNI_TAIL.length];
+  const sex     = genome.SX === 0 ? "♂" : "♀";
   const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
 
-  // Helper: build a padded line centred within `grid` columns
-  // content = string of characters to place
-  // indent  = extra spaces to push right of centre
-  function line(content, indent = 0) {
-    const total   = grid + 4;   // +4 gives breathing room on each side
-    const padding = Math.floor((total - content.length) / 2) + indent;
-    return " ".repeat(Math.max(0, padding)) + content;
+  // Mirror closing limbs
+  const closingL = limR === ")" ? "(" : limR === "}" ? "{" : limR === "⟩" ? "⟨" : limR === "▷" ? "◁" : limR === "»" ? "«" : "\\";
+  const closingR = limL === "(" ? ")" : limL === "{" ? "}" : limL === "⟨" ? "⟩" : limL === "◁" ? "▷" : limL === "«" ? "»" : "/";
+
+  // Centre a single string within (grid + limb width) total columns.
+  // fullWidth = the reference width everything is padded to match.
+  const fullWidth = grid + 2; // limL + body(grid) + limR
+  function centre(str) {
+    const pad = Math.max(0, Math.floor((fullWidth - str.length) / 2));
+    return " ".repeat(pad) + str;
   }
 
-  // ---- FOSSIL render ----
-  if (fossil) {
-    const fb   = rawBody;
-    const fh   = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
-    const bodyW = Math.max(2, Math.floor(grid / 4));
-    const mid   = fb.repeat(bodyW * 2 + 1);
-    const side  = "[" + fb.repeat(bodyW) + "]";
-    return [
-      line(fh),
-      line(side),
-      line(mid),
-      line(side),
-    ].join("\n");
+  // Body row that exactly fills `grid` columns.
+  // rawBody is 1 char; repeat to fill grid, trim/pad to exact width.
+  function bodyFill(w) {
+    return rawBody.repeat(Math.ceil(w / rawBody.length)).slice(0, w);
   }
 
-  // ---- Body width scales with grid ----
-  // grid 3→0 extra, 5→0, 7→0, 9→1, 13→2, 17→3, 21→4
-  const bodyExtra = Math.max(0, Math.floor((grid - 7) / 3));
-  const bodyRow   = rawBody.repeat(bodyExtra + 1);   // e.g. "◆◆◆"
+  // A full-width body row with limbs: limL + body(grid) + limR  = fullWidth chars
+  function bodyLine(lChar, rChar) {
+    return centre(lChar + bodyFill(grid) + rChar);
+  }
 
-  // ---- Assemble lines top→bottom depending on stage ----
+  // Number of middle rows scales with grid so taller creatures fill vertically.
+  // Minimum 1 for Child+, grows every ~10 grid units.
+  function midRowCount() {
+    return Math.max(1, Math.floor(grid / 10));
+  }
+
   const lines = [];
 
-  // — Ornament row (Teen+) —
+  // ---- FOSSIL ----
+  if (fossil) {
+    const fh   = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
+    const side = "[" + bodyFill(grid) + "]";
+    const mid  = bodyFill(grid + 2);   // full width, no brackets
+    lines.push(centre(fh));
+    lines.push(centre(side));
+    for (let i = 0; i < midRowCount(); i++) lines.push(centre(mid));
+    lines.push(centre(side));
+    return lines.join("\n");
+  }
+
+  // ---- ORNAMENT ROW (Teen+) ----
   if (pct >= 0.25) {
     const ornRow = fertile
       ? UNI_SPARKLE + " " + sigil + sex + " " + UNI_SPARKLE
       : orn;
-    lines.push(line(ornRow));
+    lines.push(centre(ornRow));
   }
 
-  // — Sigil + sex row (Toddler+) —
-  if (pct >= 0.05 && pct < 0.25) {
-    lines.push(line(sigil + sex));
-  } else if (pct >= 0.25) {
-    lines.push(line(sigil + sex));
+  // ---- SIGIL + SEX ROW (Toddler+) ----
+  if (pct >= 0.05) {
+    lines.push(centre(sigil + sex));
   }
 
-  // — Baby: just body blob, no limbs —
+  // ---- BABY: sigil + solid body blob filling grid, no limbs ----
   if (pct < 0.05) {
-    lines.push(line(sigil));
-    lines.push(line(rawBody));
+    lines.push(centre(sigil));
+    lines.push(centre(bodyFill(grid)));
     return lines.join("\n");
   }
 
-  // — Upper limb row (Toddler+) —
-  if (pct >= 0.05) {
-    lines.push(line(limL + bodyRow + limR));
-  }
+  // ---- UPPER LIMB ROW (Toddler+) ----
+  lines.push(bodyLine(limL, limR));
 
-  // — Middle body rows (Child+) —
+  // ---- MIDDLE BODY ROWS (Child+) ----
   if (pct >= 0.12) {
-    // For larger grids add extra middle rows
-    const midRows = Math.max(1, bodyExtra);
-    for (let i = 0; i < midRows; i++) {
-      lines.push(line(limCL + bodyRow + limCR));
+    for (let i = 0; i < midRowCount(); i++) {
+      lines.push(bodyLine(limCL, limCR));
     }
   }
 
-  // — Lower limb row (Child+) —
+  // ---- LOWER LIMB ROW (Child+) ----
   if (pct >= 0.12) {
-    // Mirror of upper limb — use closing versions
-    const closingL = limCR === "▷" ? "\\" : (limL === "/" ? "\\" : limL);
-    const closingR = limCL === "◁" ? "/"    : (limR === "\\" ? "/" : limR);
-    lines.push(line(closingL + bodyRow + closingR));
+    lines.push(bodyLine(closingL, closingR));
   }
 
-  // — Tail (Child+) —
+  // ---- TAIL (Child+) ----
   if (pct >= 0.12) {
-    lines.push(line(tail));
+    lines.push(centre(tail));
   }
 
   return lines.join("\n");
