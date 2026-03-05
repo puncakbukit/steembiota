@@ -133,14 +133,14 @@ const UNI_SPARKLE = "✦";
 
 // ---- Grid size by lifecycle percentage ----
 function unicodeGridSize(pct) {
-  if (pct < 0.05) return 3;
-  if (pct < 0.12) return 5;
-  if (pct < 0.25) return 7;
-  if (pct < 0.40) return 9;
-  if (pct < 0.60) return 13;
-  if (pct < 0.80) return 17;
-  if (pct < 1.00) return 21;
-  return 13; // fossil
+  if (pct < 0.05) return 9;
+  if (pct < 0.12) return 15;
+  if (pct < 0.25) return 21;
+  if (pct < 0.40) return 27;
+  if (pct < 0.60) return 39;
+  if (pct < 0.80) return 51;
+  if (pct < 1.00) return 63;
+  return 39; // fossil
 }
 
 // ---- Main builder ----
