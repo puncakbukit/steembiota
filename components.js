@@ -164,60 +164,393 @@ const UserProfileComponent = {
 // ============================================================
 
 // ---- CreatureCanvasComponent ----
-// Renders the genome visually onto a <canvas> element.
-// :genome (object) — triggers re-render on change.
-// :fossil (bool)   — desaturated, dimmed rendering when true.
+// Full genome-driven renderer with per-stage lifecycle evolution.
+//
+// Props:
+//   :genome  — genome object
+//   :age     — current age in days (integer)
+//   :fossil  — bool shortcut for age >= LIF
+//
+// Pipeline: genome seeds → base phenotype → lifecycle modifiers → draw
 const CreatureCanvasComponent = {
   name: "CreatureCanvasComponent",
   props: {
     genome: { type: Object,  default: null  },
+    age:    { type: Number,  default: 0     },
     fossil: { type: Boolean, default: false }
   },
   watch: {
-    genome(val) { if (val) this.$nextTick(() => this.draw(val, this.fossil)); },
-    fossil(val) { if (this.genome) this.$nextTick(() => this.draw(this.genome, val)); }
+    genome()      { this.$nextTick(() => this.draw()); },
+    age()         { this.$nextTick(() => this.draw()); },
+    fossil()      { this.$nextTick(() => this.draw()); },
   },
-  mounted() {
-    if (this.genome) this.draw(this.genome, this.fossil);
-  },
+  mounted() { this.draw(); },
   methods: {
-    draw(genome, fossil) {
+
+    // ----------------------------------------------------------
+    // Tiny seeded PRNG (mulberry32) — pure, no side-effects.
+    // Returns a function that yields floats in [0, 1).
+    // ----------------------------------------------------------
+    makePrng(seed) {
+      let s = seed >>> 0;
+      return () => {
+        s += 0x6D2B79F5;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    },
+
+    // ----------------------------------------------------------
+    // Derive phenotype from genome + age.
+    // All values are in [0,1] normalised space before drawing.
+    // ----------------------------------------------------------
+    buildPhenotype(genome, age) {
+      const pct   = Math.min(age / genome.LIF, 1.0); // 0–1 lifespan progress
+      const fossil = pct >= 1.0;
+
+      // ---- Lifecycle growth/decay scalars ----
+      // appendageScale and ornamentScale grow through youth, decay in old age.
+      let appendageScale, ornamentScale, patternOpacity, colorSat, colorLight;
+
+      if      (pct < 0.05) { appendageScale = 0.15; ornamentScale = 0.00; patternOpacity = 0.10; }
+      else if (pct < 0.12) { appendageScale = 0.35; ornamentScale = 0.10; patternOpacity = 0.30; }
+      else if (pct < 0.25) { appendageScale = 0.60; ornamentScale = 0.30; patternOpacity = 0.60; }
+      else if (pct < 0.40) { appendageScale = 0.85; ornamentScale = 0.70; patternOpacity = 0.90; }
+      else if (pct < 0.60) { appendageScale = 1.00; ornamentScale = 1.00; patternOpacity = 1.00; }
+      else if (pct < 0.80) { appendageScale = 0.97; ornamentScale = 0.90; patternOpacity = 0.95; }
+      else if (pct < 1.00) { appendageScale = 0.90; ornamentScale = 0.80; patternOpacity = 0.85; }
+      else                 { appendageScale = 0.70; ornamentScale = 0.00; patternOpacity = 0.00; }
+
+      // ---- Fertility window glow ----
+      const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+
+      // ---- GEN → color palette family (8 palettes cycling on GEN % 8) ----
+      const palettes = [
+        { base: 160 }, // teal/emerald
+        { base: 200 }, // cyan/sky
+        { base: 280 }, // violet/purple
+        { base:  30 }, // amber/gold
+        { base: 340 }, // rose/crimson
+        { base: 100 }, // lime/olive
+        { base: 240 }, // blue/indigo
+        { base:  55 }, // yellow/ochre
+      ];
+      const paletteBase = palettes[genome.GEN % 8].base;
+      const finalHue    = (paletteBase + genome.CLR) % 360;
+
+      // Saturation: full at peak, fades with age; +10% during fertility
+      colorSat   = fossil ? 8
+                 : 55 + (ornamentScale * 20) + (fertile ? 10 : 0);
+      colorLight = fossil ? 28
+                 : 40 + (pct < 0.6 ? 10 : 0);
+
+      // ---- SX → sexual dimorphism ----
+      const male          = genome.SX === 0;
+      const bodyScale     = male ? 1.00 : 1.10;
+      const ornScaleSex   = male ? 1.20 : 0.90;
+
+      // ---- MOR → body shape (seeded) ----
+      const morRng    = this.makePrng(genome.MOR);
+      const bodyRx    = 50 + morRng() * 30;   // x-radius  50–80
+      const bodyRy    = 65 + morRng() * 25;   // y-radius  65–90
+      const headRatio = 0.25 + morRng() * 0.2; // 0.25–0.45
+      const hasTail   = morRng() > 0.4;
+      const tailLen   = 20 + morRng() * 40;
+
+      // ---- APP → appendages (seeded) ----
+      const appRng    = this.makePrng(genome.APP);
+      const limbCount = 2 + Math.floor(appRng() * 3);   // 2–4
+      const hasHorns  = appRng() > 0.45;
+      const hornLen   = 10 + appRng() * 20;
+      const hasFins   = appRng() > 0.60;
+      const finSize   = 8 + appRng() * 18;
+
+      // ---- ORN → ornaments (seeded) ----
+      const ornRng     = this.makePrng(genome.ORN);
+      const spikeCount = Math.floor(ornRng() * 7);       // 0–6
+      const glowNodes  = Math.floor(ornRng() * 4);       // 0–3
+      const hasFrills  = ornRng() > 0.55;
+      const frillSize  = 6 + ornRng() * 14;
+      const patternType = Math.floor(ornRng() * 3);      // 0=none 1=spots 2=stripes
+
+      return {
+        fossil, pct,
+        // color
+        finalHue, colorSat, colorLight, fertile,
+        // body
+        bodyRx: bodyRx * bodyScale, bodyRy: bodyRy * bodyScale,
+        headRatio, hasTail, tailLen,
+        // appendages
+        limbCount, hasHorns, hornLen, hasFins, finSize,
+        appendageScale: appendageScale * (male ? 1.0 : 0.9),
+        // ornaments
+        spikeCount, glowNodes, hasFrills, frillSize, patternType,
+        ornamentScale: ornamentScale * ornScaleSex,
+        patternOpacity,
+        // eye size — large on babies, normal otherwise
+        eyeRadius: pct < 0.05 ? 11 : pct < 0.12 ? 9 : 7,
+      };
+    },
+
+    // ----------------------------------------------------------
+    // Main draw routine
+    // ----------------------------------------------------------
+    draw() {
       const canvas = this.$refs.canvas;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, 300, 300);
+      if (!canvas || !this.genome) return;
+      const ctx  = canvas.getContext("2d");
+      const W    = canvas.width;
+      const H    = canvas.height;
+      const cx   = W / 2;
+      const cy   = H / 2;
 
-      const baseHue  = (genome.GEN * 137.508) % 360;
-      const hue      = (baseHue + genome.CLR) % 360;
-      const sat      = fossil ? 10  : 70;   // desaturate when fossilised
-      const light    = fossil ? 30  : 50;   // dim when fossilised
-      const alpha    = fossil ? 0.4 : 1.0;
+      ctx.clearRect(0, 0, W, H);
 
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle   = `hsl(${hue}, ${sat}%, ${light}%)`;
-      ctx.strokeStyle = `hsl(${hue}, ${sat}%, ${Math.max(light - 20, 10)}%)`;
-      ctx.lineWidth   = 3;
+      const g = this.genome;
+      const p = this.buildPhenotype(g, this.age);
 
-      ctx.beginPath();
-      ctx.ellipse(150, 150, 60 + (genome.MOR % 40), 80, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      const fill   = `hsl(${p.finalHue}, ${p.colorSat}%, ${p.colorLight}%)`;
+      const stroke = `hsl(${p.finalHue}, ${p.colorSat}%, ${Math.max(p.colorLight - 18, 8)}%)`;
+      const dim    = `hsl(${p.finalHue}, ${Math.max(p.colorSat - 20, 5)}%, ${Math.max(p.colorLight - 10, 8)}%)`;
 
-      // Eyes — hidden on fossil
-      if (!fossil) {
-        ctx.fillStyle = "#000";
+      // ---- FOSSIL special render ----
+      if (p.fossil) {
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle   = "#555";
+        ctx.strokeStyle = "#333";
+        ctx.lineWidth   = 2;
         ctx.beginPath();
-        ctx.arc(130, 140, 8, 0, Math.PI * 2);
-        ctx.arc(170, 140, 8, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.ellipse(cx, cy, p.bodyRx * 0.7, p.bodyRy * 0.7, 0, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+        // crack lines
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 5; i++) {
+          const crackRng = this.makePrng(g.MOR + i * 31);
+          const sx = cx + (crackRng() - 0.5) * p.bodyRx * 1.2;
+          const sy = cy + (crackRng() - 0.5) * p.bodyRy * 1.2;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + (crackRng() - 0.5) * 30, sy + (crackRng() - 0.5) * 30);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1.0;
+        return;
       }
 
-      ctx.globalAlpha = 1.0;
+      // ---- TAIL ----
+      if (p.hasTail && p.appendageScale > 0.2) {
+        const tScale = p.tailLen * p.appendageScale;
+        ctx.fillStyle = dim;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + p.bodyRx * 0.7, cy + 10);
+        ctx.quadraticCurveTo(
+          cx + p.bodyRx + tScale * 0.6, cy + tScale * 0.5,
+          cx + p.bodyRx + tScale,        cy
+        );
+        ctx.quadraticCurveTo(
+          cx + p.bodyRx + tScale * 0.6, cy - tScale * 0.3,
+          cx + p.bodyRx * 0.7, cy - 10
+        );
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+
+      // ---- LIMBS ----
+      if (p.appendageScale > 0.1) {
+        ctx.fillStyle = dim;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 2;
+        const limbLen = 22 * p.appendageScale;
+        const limbW   = 7  * p.appendageScale;
+        // bottom limbs
+        for (let i = 0; i < p.limbCount; i++) {
+          const spread = (p.limbCount - 1) * 0.5;
+          const lx = cx - spread * 22 + i * 22;
+          ctx.beginPath();
+          ctx.roundRect
+            ? ctx.roundRect(lx - limbW / 2, cy + p.bodyRy * 0.75, limbW, limbLen, 4)
+            : ctx.rect(lx - limbW / 2, cy + p.bodyRy * 0.75, limbW, limbLen);
+          ctx.fill(); ctx.stroke();
+        }
+      }
+
+      // ---- FINS (dorsal) ----
+      if (p.hasFins && p.appendageScale > 0.3) {
+        const fScale = p.finSize * p.appendageScale;
+        ctx.fillStyle   = `hsl(${p.finalHue}, ${p.colorSat}%, ${p.colorLight + 10}%)`;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth   = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx - fScale, cy - p.bodyRy * 0.5);
+        ctx.lineTo(cx,           cy - p.bodyRy * 0.85 - fScale);
+        ctx.lineTo(cx + fScale, cy - p.bodyRy * 0.5);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+
+      // ---- MAIN BODY ----
+      ctx.fillStyle   = fill;
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth   = 3;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, p.bodyRx, p.bodyRy, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // ---- PATTERN (inside body clip) ----
+      if (p.patternOpacity > 0.05 && p.patternType > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, p.bodyRx - 2, p.bodyRy - 2, 0, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.globalAlpha = p.patternOpacity * 0.35;
+        ctx.fillStyle   = `hsl(${(p.finalHue + 40) % 360}, 60%, 70%)`;
+
+        if (p.patternType === 1) {
+          // spots
+          const spotRng = this.makePrng(g.ORN + 7);
+          for (let i = 0; i < 8; i++) {
+            const sx = cx + (spotRng() - 0.5) * p.bodyRx * 1.4;
+            const sy = cy + (spotRng() - 0.5) * p.bodyRy * 1.4;
+            const sr = 4 + spotRng() * 8;
+            ctx.beginPath();
+            ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else {
+          // stripes
+          for (let i = -4; i <= 4; i++) {
+            ctx.fillRect(cx + i * 14 - 4, cy - p.bodyRy, 7, p.bodyRy * 2);
+          }
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1.0;
+      }
+
+      // ---- HORNS ----
+      if (p.hasHorns && p.ornamentScale > 0.05) {
+        const hLen = p.hornLen * p.ornamentScale;
+        ctx.fillStyle   = `hsl(${(p.finalHue + 20) % 360}, 50%, 35%)`;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth   = 1.5;
+        // left horn
+        ctx.beginPath();
+        ctx.moveTo(cx - 18, cy - p.bodyRy * 0.7);
+        ctx.lineTo(cx - 22, cy - p.bodyRy * 0.7 - hLen);
+        ctx.lineTo(cx - 12, cy - p.bodyRy * 0.7 - hLen * 0.3);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        // right horn
+        ctx.beginPath();
+        ctx.moveTo(cx + 18, cy - p.bodyRy * 0.7);
+        ctx.lineTo(cx + 22, cy - p.bodyRy * 0.7 - hLen);
+        ctx.lineTo(cx + 12, cy - p.bodyRy * 0.7 - hLen * 0.3);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+
+      // ---- SPIKES ----
+      if (p.spikeCount > 0 && p.ornamentScale > 0.2) {
+        const sLen = 10 * p.ornamentScale;
+        ctx.fillStyle   = `hsl(${(p.finalHue + 30) % 360}, 55%, 40%)`;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth   = 1;
+        for (let i = 0; i < p.spikeCount; i++) {
+          const angle = (Math.PI * 2 / p.spikeCount) * i - Math.PI / 2;
+          const bx    = cx + Math.cos(angle) * p.bodyRx * 0.9;
+          const by    = cy + Math.sin(angle) * p.bodyRy * 0.9;
+          const ox    = Math.cos(angle) * sLen;
+          const oy    = Math.sin(angle) * sLen;
+          ctx.beginPath();
+          ctx.moveTo(bx - oy * 0.3, by + ox * 0.3);
+          ctx.lineTo(bx + ox,       by + oy);
+          ctx.lineTo(bx + oy * 0.3, by - ox * 0.3);
+          ctx.closePath();
+          ctx.fill(); ctx.stroke();
+        }
+      }
+
+      // ---- FRILLS ----
+      if (p.hasFrills && p.ornamentScale > 0.25) {
+        const fLen = p.frillSize * p.ornamentScale;
+        ctx.strokeStyle = `hsl(${p.finalHue}, ${p.colorSat + 10}%, ${p.colorLight + 15}%)`;
+        ctx.lineWidth   = 2;
+        for (let i = -2; i <= 2; i++) {
+          ctx.globalAlpha = 0.7;
+          ctx.beginPath();
+          ctx.moveTo(cx + i * 10, cy - p.bodyRy * 0.85);
+          ctx.lineTo(cx + i * 10, cy - p.bodyRy * 0.85 - fLen);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1.0;
+      }
+
+      // ---- HEAD ----
+      const headR = p.bodyRx * p.headRatio;
+      const headY = cy - p.bodyRy * 0.72;
+      ctx.fillStyle   = fill;
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth   = 2.5;
+      ctx.beginPath();
+      ctx.arc(cx, headY, headR, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // ---- EYES ----
+      const eyeOff  = headR * 0.38;
+      const eyeR    = p.eyeRadius;
+      // sclera
+      ctx.fillStyle = "#eee";
+      ctx.beginPath();
+      ctx.arc(cx - eyeOff, headY - 2, eyeR, 0, Math.PI * 2);
+      ctx.arc(cx + eyeOff, headY - 2, eyeR, 0, Math.PI * 2);
+      ctx.fill();
+      // pupil
+      ctx.fillStyle = "#111";
+      ctx.beginPath();
+      ctx.arc(cx - eyeOff + 1, headY - 1, eyeR * 0.55, 0, Math.PI * 2);
+      ctx.arc(cx + eyeOff + 1, headY - 1, eyeR * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+
+      // ---- GLOW NODES (fertility / ornament) ----
+      if (p.glowNodes > 0 && p.ornamentScale > 0.4) {
+        const glowRng = this.makePrng(g.ORN + 99);
+        ctx.globalAlpha = p.ornamentScale * (p.fertile ? 0.9 : 0.5);
+        for (let i = 0; i < p.glowNodes; i++) {
+          const angle = glowRng() * Math.PI * 2;
+          const dist  = glowRng() * p.bodyRx * 0.7;
+          const gx    = cx + Math.cos(angle) * dist;
+          const gy    = cy + Math.sin(angle) * dist;
+          const grad  = ctx.createRadialGradient(gx, gy, 0, gx, gy, 10);
+          grad.addColorStop(0,   `hsl(${(p.finalHue + 60) % 360}, 100%, 85%)`);
+          grad.addColorStop(1,   `hsla(${p.finalHue}, 80%, 60%, 0)`);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 10, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+      }
+
+      // ---- FERTILITY AURA ----
+      if (p.fertile) {
+        ctx.globalAlpha = 0.18;
+        const aura = ctx.createRadialGradient(cx, cy, p.bodyRx * 0.5, cx, cy, p.bodyRx * 1.5);
+        aura.addColorStop(0,   `hsl(${(p.finalHue + 60) % 360}, 100%, 80%)`);
+        aura.addColorStop(1,   `hsla(${p.finalHue}, 60%, 50%, 0)`);
+        ctx.fillStyle = aura;
+        ctx.beginPath();
+        ctx.arc(cx, cy, p.bodyRx * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+      }
     }
   },
-  template: `
-    <canvas ref="canvas" width="300" height="300"></canvas>
-  `
+  template: `<canvas ref="canvas" width="300" height="300"></canvas>`
+};
+
 };
 
 // ---- GenomeTableComponent ----

@@ -255,8 +255,8 @@ const HomeView = {
         </div>
       </div>
 
-      <!-- Canvas render (fossil = desaturated is handled inside component) -->
-      <creature-canvas-component :genome="genome" :fossil="fossil"></creature-canvas-component>
+      <!-- Canvas render — age drives full lifecycle visual evolution -->
+      <creature-canvas-component :genome="genome" :age="age" :fossil="fossil"></creature-canvas-component>
 
       <!-- Fossil overlay label -->
       <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
