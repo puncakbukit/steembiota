@@ -188,8 +188,7 @@ function buildUnicodeArt(genome, age) {
       line(side),
       line(mid),
       line(side),
-    ].join("
-");
+    ].join("\n");
   }
 
   // ---- Body width scales with grid ----
