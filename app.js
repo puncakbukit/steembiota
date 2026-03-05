@@ -107,31 +107,149 @@ function isFossil(age, genome) {
 }
 
 // ============================================================
+// STEEMBIOTA UNICODE ART SYSTEM
+// Assembles a 5-line glyph skeleton from genome seeds.
+// Grid size grows with lifecycle stage — creatures visibly develop.
+// ============================================================
 
-// fossil = true → sparse, faded rune density for dead creatures
-function buildUnicodeArt(genome, fossil = false) {
-  const rune = ["✶", "▲", "▣", "⊕", "☼", "✜", "⟁", "❂"][genome.GEN % 8];
-  const deadRune = "·";
-  let grid = "";
-  for (let y = 0; y < 15; y++) {
-    for (let x = 0; x < 25; x++) {
-      const dx   = x - 12;
-      const dy   = y - 7;
-      const body = (dx * dx) / 60 + (dy * dy) / 20 < 1;
-      if (body) {
-        if (fossil) {
-          // Sparse fossil: keep only every 3rd body cell as a faded dot
-          grid += ((x + y) % 3 === 0) ? deadRune : " ";
-        } else {
-          grid += (y === 6 && (x === 9 || x === 15)) ? "◉" : rune;
-        }
-      } else {
-        grid += " ";
-      }
-    }
-    grid += "\n";
+// ---- Glyph pools (all indexed by genome seeds mod pool size) ----
+
+const UNI_SIGIL  = ["⟡","✶","❖","✦","◈","✧"];          // GEN % 6
+const UNI_BODY   = ["█","●","◉","◆","◍","▣"];          // MOR % 6
+const UNI_LIMB_L = ["/","(", "{","⟨","◁","«"];          // APP % 6  left limb
+const UNI_LIMB_R = ["\\",")","}","⟩","▷","»"];         // APP % 6  right limb
+const UNI_LIMB_C = ["◁","(","«","⟨","<","∈"];           // APP % 6  center-left
+const UNI_LIMB_D = ["▷",")",">","⟩","»","∋"];           // APP % 6  center-right
+const UNI_ORN    = ["✦","*","∴","°","⊹","✧"];           // ORN % 6  ornament
+const UNI_TAIL   = ["∿","~","≋","∾","⌇","⌀"];           // MOR % 6  tail
+const UNI_FOSSIL_BODY = ["▒","░","▓","╬","╪","╫"];      // GEN % 6  fossil body
+
+// Body glyph degrades with age: full → hollow → very faded
+const UNI_BODY_ELDER  = ["□","○","◎","◇","◌","▢"];      // hollow variants
+const UNI_FOSSIL_HEAD = ["☉","⊗","⊙","◎","⊛","⊜"];      // GEN % 6
+
+// Fertility sparkle flanks
+const UNI_SPARKLE = "✦";
+
+// ---- Grid size by lifecycle percentage ----
+function unicodeGridSize(pct) {
+  if (pct < 0.05) return 3;
+  if (pct < 0.12) return 5;
+  if (pct < 0.25) return 7;
+  if (pct < 0.40) return 9;
+  if (pct < 0.60) return 13;
+  if (pct < 0.80) return 17;
+  if (pct < 1.00) return 21;
+  return 13; // fossil
+}
+
+// ---- Main builder ----
+// genome : genome object
+// age    : integer days (0 = newborn)
+// Returns a multi-line string ready for <pre> display.
+function buildUnicodeArt(genome, age) {
+  const pct    = Math.min(age / genome.LIF, 1.0);
+  const fossil = pct >= 1.0;
+  const grid   = unicodeGridSize(pct);
+  const half   = Math.floor(grid / 2);   // center column index
+
+  // Pick glyph primitives from genome seeds
+  const sigil  = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
+  const rawBody = fossil
+    ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
+    : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY)[genome.MOR % UNI_BODY.length];
+  const limL   = UNI_LIMB_L[genome.APP % UNI_LIMB_L.length];
+  const limR   = UNI_LIMB_R[genome.APP % UNI_LIMB_R.length];
+  const limCL  = UNI_LIMB_C[genome.APP % UNI_LIMB_C.length];
+  const limCR  = UNI_LIMB_D[genome.APP % UNI_LIMB_D.length];
+  const orn    = UNI_ORN   [genome.ORN % UNI_ORN.length];
+  const tail   = UNI_TAIL  [genome.MOR % UNI_TAIL.length];
+  const sex    = genome.SX === 0 ? "♂" : "♀";
+  const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+
+  // Helper: build a padded line centred within `grid` columns
+  // content = string of characters to place
+  // indent  = extra spaces to push right of centre
+  function line(content, indent = 0) {
+    const total   = grid + 4;   // +4 gives breathing room on each side
+    const padding = Math.floor((total - content.length) / 2) + indent;
+    return " ".repeat(Math.max(0, padding)) + content;
   }
-  return grid;
+
+  // ---- FOSSIL render ----
+  if (fossil) {
+    const fb   = rawBody;
+    const fh   = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
+    const bodyW = Math.max(2, Math.floor(grid / 4));
+    const mid   = fb.repeat(bodyW * 2 + 1);
+    const side  = "[" + fb.repeat(bodyW) + "]";
+    return [
+      line(fh),
+      line(side),
+      line(mid),
+      line(side),
+    ].join("
+");
+  }
+
+  // ---- Body width scales with grid ----
+  // grid 3→0 extra, 5→0, 7→0, 9→1, 13→2, 17→3, 21→4
+  const bodyExtra = Math.max(0, Math.floor((grid - 7) / 3));
+  const bodyRow   = rawBody.repeat(bodyExtra + 1);   // e.g. "◆◆◆"
+
+  // ---- Assemble lines top→bottom depending on stage ----
+  const lines = [];
+
+  // — Ornament row (Teen+) —
+  if (pct >= 0.25) {
+    const ornRow = fertile
+      ? UNI_SPARKLE + " " + sigil + sex + " " + UNI_SPARKLE
+      : orn;
+    lines.push(line(ornRow));
+  }
+
+  // — Sigil + sex row (Toddler+) —
+  if (pct >= 0.05 && pct < 0.25) {
+    lines.push(line(sigil + sex));
+  } else if (pct >= 0.25) {
+    lines.push(line(sigil + sex));
+  }
+
+  // — Baby: just body blob, no limbs —
+  if (pct < 0.05) {
+    lines.push(line(sigil));
+    lines.push(line(rawBody));
+    return lines.join("\n");
+  }
+
+  // — Upper limb row (Toddler+) —
+  if (pct >= 0.05) {
+    lines.push(line(limL + bodyRow + limR));
+  }
+
+  // — Middle body rows (Child+) —
+  if (pct >= 0.12) {
+    // For larger grids add extra middle rows
+    const midRows = Math.max(1, bodyExtra);
+    for (let i = 0; i < midRows; i++) {
+      lines.push(line(limCL + bodyRow + limCR));
+    }
+  }
+
+  // — Lower limb row (Child+) —
+  if (pct >= 0.12) {
+    // Mirror of upper limb — use closing versions
+    const closingL = limCR === "▷" ? "\\" : (limL === "/" ? "\\" : limL);
+    const closingR = limCL === "◁" ? "/"    : (limR === "\\" ? "/" : limR);
+    lines.push(line(closingL + bodyRow + closingR));
+  }
+
+  // — Tail (Child+) —
+  if (pct >= 0.12) {
+    lines.push(line(tail));
+  }
+
+  return lines.join("\n");
 }
 
 // ============================================================
@@ -189,15 +307,15 @@ const HomeView = {
     }
   },
   watch: {
-    fossil(isFossil) {
-      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, isFossil);
+    age(newAge) {
+      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, newAge);
     }
   },
   methods: {
     createFounder() {
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
-      this.unicodeArt     = buildUnicodeArt(this.genome, false);
+      this.unicodeArt     = buildUnicodeArt(this.genome, 0);
     },
 
     async publishCreature() {
