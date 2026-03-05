@@ -590,6 +590,55 @@ const GenomeTableComponent = {
   `
 };
 
+// ---- GlobalProfileBannerComponent ----
+// Compact logged-in user banner shown on every page.
+// Displays cover image, avatar, display name, and @username.
+const GlobalProfileBannerComponent = {
+  name: "GlobalProfileBannerComponent",
+  props: {
+    profileData: { type: Object, default: null }
+  },
+  methods: {
+    safeUrl(url) {
+      try {
+        const u = new URL(url);
+        return u.protocol === "https:" ? url : "";
+      } catch { return ""; }
+    }
+  },
+  template: `
+    <div v-if="profileData" style="position:relative;margin:8px auto 0;max-width:700px;border-radius:10px;overflow:hidden;border:1px solid #2a2a2a;">
+      <!-- Cover image -->
+      <div :style="{
+        height: '72px',
+        background: safeUrl(profileData.coverImage)
+          ? 'url(' + safeUrl(profileData.coverImage) + ') center/cover no-repeat'
+          : 'linear-gradient(135deg, #1a2e1a 0%, #0d1a0d 100%)',
+        borderBottom: '1px solid #222'
+      }"></div>
+
+      <!-- Avatar + info row -->
+      <div style="display:flex;align-items:center;gap:12px;padding:0 16px 10px;background:#161616;">
+        <!-- Avatar overlapping cover -->
+        <img
+          :src="safeUrl(profileData.profileImage) || ''"
+          @error="$event.target.style.display='none'"
+          style="width:52px;height:52px;border-radius:50%;border:2px solid #2e7d32;background:#222;margin-top:-26px;flex-shrink:0;object-fit:cover;"
+        />
+        <div style="text-align:left;margin-top:4px;min-width:0;">
+          <div style="font-size:0.95rem;font-weight:bold;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{ profileData.displayName }}
+          </div>
+          <div style="font-size:0.78rem;color:#66bb6a;">@{{ profileData.username }}</div>
+          <div v-if="profileData.about" style="font-size:0.75rem;color:#666;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px;">
+            {{ profileData.about }}
+          </div>
+        </div>
+      </div>
+    </div>
+  `
+};
+
 // ============================================================
 // BreedingPanelComponent
 // Lets users paste two SteemBiota post URLs, loads genomes,

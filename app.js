@@ -680,7 +680,8 @@ const App = {
     UserProfileComponent,
     LoadingSpinnerComponent,
     CreatureCanvasComponent,
-    GenomeTableComponent
+    GenomeTableComponent,
+    GlobalProfileBannerComponent
   },
 
   setup() {
@@ -691,6 +692,12 @@ const App = {
     const showLoginForm = ref(false);
     const isLoggingIn   = ref(false);
     const notification  = ref({ message: "", type: "error" });
+    const profileData   = ref(null);
+
+    async function loadProfile(user) {
+      if (!user) { profileData.value = null; return; }
+      profileData.value = await fetchAccount(user);
+    }
 
     function notify(message, type = "error") {
       notification.value = { message, type };
@@ -701,6 +708,7 @@ const App = {
 
     onMounted(() => {
       setRPC(0);
+      if (username.value) loadProfile(username.value);
       let attempts = 0;
       const interval = setInterval(() => {
         attempts++;
@@ -737,11 +745,13 @@ const App = {
         loginError.value    = "";
         showLoginForm.value = false;
         notify("Logged in as @" + user, "success");
+        loadProfile(user);
       });
     }
 
     function logout() {
       username.value = "";
+      profileData.value = null;
       localStorage.removeItem("steem_user");
       showLoginForm.value = false;
     }
@@ -749,12 +759,13 @@ const App = {
     provide("username",    username);
     provide("hasKeychain", hasKeychain);
     provide("notify",      notify);
+    provide("profileData", profileData);
 
     return {
       username, hasKeychain, keychainReady,
       loginError, showLoginForm, isLoggingIn,
       notification, notify, dismissNotification,
-      login, logout
+      login, logout, profileData
     };
   },
 
@@ -804,6 +815,12 @@ const App = {
       @dismiss="dismissNotification"
     ></app-notification-component>
 
+    <!-- Global profile banner — visible on all pages when logged in -->
+    <global-profile-banner-component
+      v-if="username"
+      :profile-data="profileData"
+    ></global-profile-banner-component>
+
     <hr/>
 
     <!-- Page content -->
@@ -817,13 +834,14 @@ const App = {
 
 const vueApp = createApp(App);
 
-vueApp.component("AppNotificationComponent",  AppNotificationComponent);
-vueApp.component("AuthComponent",             AuthComponent);
-vueApp.component("UserProfileComponent",      UserProfileComponent);
-vueApp.component("LoadingSpinnerComponent",   LoadingSpinnerComponent);
-vueApp.component("CreatureCanvasComponent",   CreatureCanvasComponent);
-vueApp.component("GenomeTableComponent",      GenomeTableComponent);
-vueApp.component("BreedingPanelComponent",    BreedingPanelComponent);
+vueApp.component("AppNotificationComponent",    AppNotificationComponent);
+vueApp.component("AuthComponent",               AuthComponent);
+vueApp.component("UserProfileComponent",        UserProfileComponent);
+vueApp.component("LoadingSpinnerComponent",     LoadingSpinnerComponent);
+vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
+vueApp.component("GenomeTableComponent",        GenomeTableComponent);
+vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
+vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 
 vueApp.use(router);
 vueApp.mount("#app");
