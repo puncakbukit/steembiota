@@ -170,9 +170,10 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
     `**Genus ID:** ${genome.GEN}  \n` +
     `**Hue:** ${genome.CLR}°  \n` +
     `**Lifespan:** ${genome.LIF} days  \n` +
-    `**Fertile:** Day ${genome.FRT_START}–${genome.FRT_END}  \n\n` +
+    `**Fertile:** Day ${genome.FRT_START}–${genome.FRT_END}  \n` +
+    `**Mutation:** MUT ${genome.MUT}  \n\n` +
     `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
-    `**Genome:** \`${JSON.stringify(genome)}\`\n\n` +
+    `\`\`\`genome\n${JSON.stringify(genome, null, 2)}\n\`\`\`\n\n` +
     `*Published via [SteemBiota — Immutable Evolution]*`;
 
   const jsonMetadata = {
@@ -193,6 +194,66 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
     "steembiota", "",
     jsonMetadata, permlink,
     ["steembiota", "gaming", "evolution"],
+    callback
+  );
+}
+
+// ---- SteemBiota — publish a bred offspring to the blockchain ----
+//
+// breedInfo: { mutated, speciated, parentA: {author,permlink}, parentB: {author,permlink} }
+function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo, callback) {
+  const permlink = buildPermlink("steembiota-offspring-" + creatureName.toLowerCase());
+  const title    = `🧬 ${creatureName} (Offspring)`;
+  const sexLabel = genome.SX === 0 ? "Male" : "Female";
+  const pA = breedInfo.parentA;
+  const pB = breedInfo.parentB;
+  const pAUrl = `https://steemit.com/@${pA.author}/${pA.permlink}`;
+  const pBUrl = `https://steemit.com/@${pB.author}/${pB.permlink}`;
+
+  const mutLine = breedInfo.speciated
+    ? "⚡ **Speciation** — new genus emerged!"
+    : breedInfo.mutated
+      ? "🧬 **Mutation** occurred during breeding"
+      : "✔ Clean inheritance";
+
+  const body =
+    `## 🧬 ${creatureName}\n\n` +
+    `**Sex:** ${sexLabel}  \n` +
+    `**Age:** 0 days (newborn)  \n` +
+    `**Genus ID:** ${genome.GEN}  \n` +
+    `**Lifespan:** ${genome.LIF} days  \n` +
+    `**Fertile:** Day ${genome.FRT_START}–${genome.FRT_END}  \n` +
+    `**Mutation tendency:** ${genome.MUT}  \n\n` +
+    `${mutLine}  \n\n` +
+    `**Parents:**  \n` +
+    `- Parent A: ${pAUrl}  \n` +
+    `- Parent B: ${pBUrl}  \n\n` +
+    `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
+    `\`\`\`genome\n${JSON.stringify(genome, null, 2)}\n\`\`\`\n\n` +
+    `*Bred via [SteemBiota — Immutable Evolution]*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota", "gaming", "evolution", "breeding"],
+    steembiota: {
+      version: "1.0",
+      genome,
+      name: creatureName,
+      age: 0,
+      lifecycleStage: "Baby",
+      type: "offspring",
+      parentA: pA,
+      parentB: pB,
+      mutated:   breedInfo.mutated,
+      speciated: breedInfo.speciated
+    }
+  };
+
+  keychainPost(
+    username, title, body,
+    "steembiota", "",
+    jsonMetadata, permlink,
+    ["steembiota", "gaming", "evolution", "breeding"],
     callback
   );
 }

@@ -574,6 +574,7 @@ const GenomeTableComponent = {
         { key: "Lifespan",          value: g.LIF },
         { key: "Fertility start",   value: g.FRT_START },
         { key: "Fertility end",     value: g.FRT_END },
+        { key: "Mutation tendency", value: g.MUT !== undefined ? g.MUT : "—" },
       ];
     }
   },
@@ -586,5 +587,192 @@ const GenomeTableComponent = {
         </tr>
       </tbody>
     </table>
+  `
+};
+
+// ============================================================
+// BreedingPanelComponent
+// Lets users paste two SteemBiota post URLs, loads genomes,
+// breeds them client-side (deterministic seeded PRNG + MUT),
+// previews the child, then publishes via Steem Keychain.
+// ============================================================
+const BreedingPanelComponent = {
+  name: "BreedingPanelComponent",
+  props: {
+    username: String
+  },
+  emits: ["notify"],
+  data() {
+    return {
+      urlA:        "",
+      urlB:        "",
+      loading:     false,
+      loadError:   "",
+      childGenome: null,
+      childName:   null,
+      childArt:    null,
+      breedInfo:   null,   // { mutated, speciated }
+      publishing:  false,
+    };
+  },
+  computed: {
+    sexLabel() {
+      if (!this.childGenome) return "";
+      return this.childGenome.SX === 0 ? "♂ Male" : "♀ Female";
+    },
+    mutationLabel() {
+      if (!this.breedInfo) return "";
+      if (this.breedInfo.speciated) return "⚡ Speciation — new genus emerged!";
+      if (this.breedInfo.mutated)   return "🧬 Mutation occurred";
+      return "✔ Clean inheritance";
+    },
+    mutationColor() {
+      if (!this.breedInfo) return "#888";
+      if (this.breedInfo.speciated) return "#ffb74d";
+      if (this.breedInfo.mutated)   return "#80deea";
+      return "#666";
+    }
+  },
+  methods: {
+    async breedCreatures() {
+      this.loadError   = "";
+      this.childGenome = null;
+      this.childArt    = null;
+      this.breedInfo   = null;
+
+      const ua = this.urlA.trim();
+      const ub = this.urlB.trim();
+      if (!ua || !ub) {
+        this.loadError = "Please enter both parent URLs.";
+        return;
+      }
+      if (ua === ub) {
+        this.loadError = "Parent A and Parent B must be different posts.";
+        return;
+      }
+
+      this.loading = true;
+      try {
+        const [resA, resB] = await Promise.all([
+          loadGenomeFromPost(ua),
+          loadGenomeFromPost(ub)
+        ]);
+        const { child, mutated, speciated } = breedGenomes(resA.genome, resB.genome);
+        this.childGenome = child;
+        this.childName   = generateFullName(child);
+        this.childArt    = buildUnicodeArt(child, 0);
+        this.breedInfo   = { mutated, speciated,
+          parentA: { author: resA.author, permlink: resA.permlink },
+          parentB: { author: resB.author, permlink: resB.permlink }
+        };
+      } catch (e) {
+        this.loadError = e.message || String(e);
+      }
+      this.loading = false;
+    },
+
+    async publishChild() {
+      if (!this.username) {
+        this.$emit("notify", "Please log in first.", "error");
+        return;
+      }
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      this.publishing = true;
+      publishOffspring(
+        this.username,
+        this.childGenome,
+        this.childArt,
+        this.childName,
+        0,
+        "Baby",
+        this.breedInfo.parentA,
+        this.breedInfo.parentB,
+        (response) => {
+          this.publishing = false;
+          if (response.success) {
+            this.$emit("notify", "🧬 " + this.childName + " published to the blockchain!", "success");
+            // Reset form
+            this.urlA = "";
+            this.urlB = "";
+            this.childGenome = null;
+            this.childArt = null;
+            this.breedInfo = null;
+          } else {
+            this.$emit("notify", "Publish failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    }
+  },
+  template: `
+    <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
+      <h3 style="color:#80deea;margin:0 0 12px;">🧬 Breed Creatures</h3>
+
+      <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
+        <input
+          v-model="urlA"
+          type="text"
+          placeholder="Parent A — Steem post URL"
+          style="font-size:13px;"
+        />
+        <input
+          v-model="urlB"
+          type="text"
+          placeholder="Parent B — Steem post URL"
+          style="font-size:13px;"
+        />
+        <button
+          @click="breedCreatures"
+          :disabled="loading"
+          style="background:#1a3a2a;"
+        >
+          {{ loading ? "Loading genomes…" : "🔬 Breed" }}
+        </button>
+      </div>
+
+      <!-- Error -->
+      <div v-if="loadError" style="color:#ff8a80;font-size:13px;margin-top:8px;">
+        ⚠ {{ loadError }}
+      </div>
+
+      <!-- Child preview -->
+      <div v-if="childGenome" style="margin-top:20px;">
+        <div style="font-size:1.1rem;font-weight:bold;color:#80deea;">
+          ❇ {{ childName }}
+        </div>
+        <div style="font-size:0.85rem;color:#888;margin:2px 0 6px;">
+          {{ sexLabel }}
+          &nbsp;·&nbsp;
+          <span :style="{ color: mutationColor }">{{ mutationLabel }}</span>
+        </div>
+
+        <!-- Unicode art preview -->
+        <pre style="font-size:11px;line-height:1.3;display:inline-block;text-align:left;">{{ childArt }}</pre>
+
+        <!-- Genome summary -->
+        <div style="font-size:12px;color:#666;margin:4px 0 10px;">
+          GEN {{ childGenome.GEN }}
+          &nbsp;·&nbsp; MOR {{ childGenome.MOR }}
+          &nbsp;·&nbsp; APP {{ childGenome.APP }}
+          &nbsp;·&nbsp; ORN {{ childGenome.ORN }}
+          &nbsp;·&nbsp; MUT {{ childGenome.MUT }}
+          &nbsp;·&nbsp; LIF {{ childGenome.LIF }} days
+        </div>
+
+        <button
+          @click="publishChild"
+          :disabled="publishing || !username"
+          style="background:#1565c0;"
+        >
+          {{ publishing ? "Publishing…" : "📡 Publish Offspring to Steem" }}
+        </button>
+        <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">
+          Log in to publish.
+        </p>
+      </div>
+    </div>
   `
 };

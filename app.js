@@ -28,8 +28,153 @@ function generateGenome() {
     CLR: randomInt(360),
     LIF,
     FRT_START,
-    FRT_END
+    FRT_END,
+    MUT: randomInt(3)       // 0–2 for founders; range 0–5
   };
+}
+
+// ============================================================
+// STEEMBIOTA BREEDING SYSTEM
+// ============================================================
+
+// Seeded PRNG (mulberry32) — ensures same parents + seed → same child.
+// Returns a function yielding floats in [0, 1).
+function makePrng(seed) {
+  let s = (seed >>> 0) || 1;
+  return () => {
+    s += 0x6D2B79F5;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Derive a deterministic integer seed from two genomes.
+// Uses a simple hash over all gene values so order-of-paste doesn't matter.
+function breedSeed(a, b) {
+  const vals = [a.GEN,a.MOR,a.APP,a.ORN,a.CLR,a.LIF,a.MUT,
+                b.GEN,b.MOR,b.APP,b.ORN,b.CLR,b.LIF,b.MUT];
+  return vals.reduce((h, v) => (Math.imul(h ^ (v | 0), 0x9e3779b9) >>> 0), 0x12345678);
+}
+
+// Mutation probability from both parents' MUT genes.
+// base = 1%; scales with combined MUT.
+function mutationChance(a, b) {
+  return 0.01 * (1 + a.MUT + b.MUT);
+}
+
+// Inherit one gene: pick from either parent, then optionally mutate.
+// rng     — seeded PRNG function
+// a, b    — parent gene values
+// mChance — probability of mutation this call
+// range   — max ± shift when mutation fires
+// min/max — clamp bounds
+function inheritGene(rng, a, b, mChance, range, min, max) {
+  let v = rng() < 0.5 ? a : b;
+  if (rng() < mChance) {
+    v = v + Math.floor(rng() * range * 2) - range;
+  }
+  return Math.max(min, Math.min(max, Math.round(v)));
+}
+
+// Rare speciation: 0.5% chance GEN mutates to an entirely new value.
+function maybeSpeciate(rng, gen) {
+  if (rng() < 0.005) return Math.floor(rng() * 1000);
+  return gen;
+}
+
+// Parse a Steem post URL into { author, permlink }.
+// Handles steemit.com and plain author/permlink strings.
+function parseSteemUrl(url) {
+  url = url.trim();
+  // Match https://steemit.com/category/@author/permlink
+  // or    https://steemit.com/@author/permlink
+  const m = url.match(/@([a-z0-9.-]+)\/([a-z0-9-]+)\s*$/i);
+  if (!m) throw new Error("Cannot parse Steem URL: " + url);
+  return { author: m[1], permlink: m[2] };
+}
+
+// Load a genome from a published SteemBiota post.
+// Tries json_metadata first (fast), falls back to body regex.
+async function loadGenomeFromPost(url) {
+  const { author, permlink } = parseSteemUrl(url);
+  const post = await fetchPost(author, permlink);
+  if (!post || !post.author) throw new Error("Post not found: " + url);
+
+  // Try json_metadata.steembiota.genome first
+  try {
+    const meta = JSON.parse(post.json_metadata || "{}");
+    if (meta.steembiota && meta.steembiota.genome) {
+      return { genome: meta.steembiota.genome, author, permlink };
+    }
+  } catch {}
+
+  // Fallback: parse ```genome ... ``` block from post body
+  const match = post.body.match(/```genome\s*([\s\S]*?)```/);
+  if (!match) throw new Error("No genome found in post: " + url);
+  return { genome: JSON.parse(match[1].trim()), author, permlink };
+}
+
+// Breed two genomes into a child genome.
+// Returns { child, mutated, speciated } for display purposes.
+function breedGenomes(a, b) {
+  if (a.GEN !== b.GEN) {
+    throw new Error(
+      "Genus mismatch: GEN " + a.GEN + " ≠ GEN " + b.GEN +
+      ". Only same-genus creatures can breed."
+    );
+  }
+
+  const seed  = breedSeed(a, b);
+  const rng   = makePrng(seed);
+  const mCh   = mutationChance(a, b);
+  const i     = (av, bv, range, min, max) => inheritGene(rng, av, bv, mCh, range, min, max);
+
+  // Track whether any mutation fired (for UI feedback)
+  const beforeMOR = (rng() < 0.5 ? a.MOR : b.MOR); // peek — rewind not possible, so we check post-hoc below
+  void beforeMOR; // used indirectly via child fields
+
+  const child = {
+    GEN:       a.GEN,                                   // same genus (may speciate below)
+    SX:        Math.floor(rng() * 2),                   // 50/50 sex
+    MOR:       i(a.MOR, b.MOR,  200, 0,    9999),
+    APP:       i(a.APP, b.APP,  200, 0,    9999),
+    ORN:       i(a.ORN, b.ORN,  200, 0,    9999),
+    CLR:       i(a.CLR, b.CLR,   10, 0,     359),
+    LIF:       i(a.LIF, b.LIF,   10, 40,    200),
+    FRT_START: 0,   // recalculated below
+    FRT_END:   0,
+    MUT:       Math.min(5, i(a.MUT, b.MUT, 1, 0, 5) + (rng() < 0.2 ? 1 : 0))
+  };
+
+  // Recalculate FRT bounds from child LIF
+  child.FRT_START = Math.min(
+    i(a.FRT_START, b.FRT_START, 5, 10, child.LIF - 10),
+    child.LIF - 10
+  );
+  child.FRT_END = Math.min(
+    i(a.FRT_END, b.FRT_END, 5, child.FRT_START + 5, child.LIF - 1),
+    child.LIF - 1
+  );
+
+  // Speciation check — may change GEN to a new value
+  const originalGEN = child.GEN;
+  child.GEN = maybeSpeciate(rng, child.GEN);
+  const speciated = child.GEN !== originalGEN;
+
+  // Detect if any field mutated vs simple mix
+  const simpleMix = {
+    MOR: rng() < 0.5 ? a.MOR : b.MOR,
+    APP: rng() < 0.5 ? a.APP : b.APP,
+    ORN: rng() < 0.5 ? a.ORN : b.ORN,
+  };
+  const mutated =
+    speciated ||
+    Math.abs(child.MOR - simpleMix.MOR) > 0 ||
+    Math.abs(child.APP - simpleMix.APP) > 0 ||
+    Math.abs(child.ORN - simpleMix.ORN) > 0;
+
+  return { child, mutated, speciated };
 }
 
 // ============================================================
@@ -286,7 +431,8 @@ const HomeView = {
   components: {
     CreatureCanvasComponent,
     GenomeTableComponent,
-    LoadingSpinnerComponent
+    LoadingSpinnerComponent,
+    BreedingPanelComponent
   },
   data() {
     return {
@@ -431,6 +577,12 @@ const HomeView = {
         Press <strong>Create Founder Creature</strong> to generate your first organism.
       </p>
 
+      <!-- Breeding panel — always visible -->
+      <breeding-panel-component
+        :username="username"
+        @notify="(msg,type) => notify(msg,type)"
+      ></breeding-panel-component>
+
     </div>
   `
 };
@@ -461,6 +613,7 @@ const AboutView = {
         <li><strong style="color:#eee;">CLR</strong> — colour hue (0–359°)</li>
         <li><strong style="color:#eee;">LIF</strong> — lifespan (80–159)</li>
         <li><strong style="color:#eee;">FRT_START / FRT_END</strong> — fertility window</li>
+        <li><strong style="color:#eee;">MUT</strong> — mutation tendency (0–5); affects offspring variation</li>
       </ul>
       <h3 style="color:#66bb6a;">Tech stack</h3>
       <p>
@@ -670,6 +823,7 @@ vueApp.component("UserProfileComponent",      UserProfileComponent);
 vueApp.component("LoadingSpinnerComponent",   LoadingSpinnerComponent);
 vueApp.component("CreatureCanvasComponent",   CreatureCanvasComponent);
 vueApp.component("GenomeTableComponent",      GenomeTableComponent);
+vueApp.component("BreedingPanelComponent",    BreedingPanelComponent);
 
 vueApp.use(router);
 vueApp.mount("#app");
