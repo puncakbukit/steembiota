@@ -107,174 +107,174 @@ function isFossil(age, genome) {
 }
 
 // ============================================================
-// STEEMBIOTA UNICODE ART SYSTEM
-// Assembles a 5-line glyph skeleton from genome seeds.
-// Grid size grows with lifecycle stage — creatures visibly develop.
+// STEEMBIOTA UNICODE ART SYSTEM v2
+// Radial distance-field renderer — organic oval body shape.
+// Grid grows with lifecycle stage; all values are deterministic.
 // ============================================================
 
-// ---- Glyph pools (all indexed by genome seeds mod pool size) ----
-
-const UNI_SIGIL  = ["⟡","✶","❖","✦","◈","✧"];          // GEN % 6
-const UNI_BODY   = ["█","●","◉","◆","◍","▣"];          // MOR % 6
-const UNI_LIMB_L = ["/","(", "{","⟨","◁","«"];          // APP % 6  left limb
-const UNI_LIMB_R = ["\\",")","}","⟩","▷","»"];         // APP % 6  right limb
-const UNI_LIMB_C = ["◁","(","«","⟨","<","∈"];           // APP % 6  center-left
-const UNI_LIMB_D = ["▷",")",">","⟩","»","∋"];           // APP % 6  center-right
-const UNI_ORN    = ["✦","*","∴","°","⊹","✧"];           // ORN % 6  ornament
-const UNI_TAIL   = ["∿","~","≋","∾","⌇","⌀"];           // MOR % 6  tail
-const UNI_FOSSIL_BODY = ["▒","░","▓","╬","╪","╫"];      // GEN % 6  fossil body
-
-// Body glyph degrades with age: full → hollow → very faded
-const UNI_BODY_ELDER  = ["□","○","◎","◇","◌","▢"];      // hollow variants
-const UNI_FOSSIL_HEAD = ["☉","⊗","⊙","◎","⊛","⊜"];      // GEN % 6
-
-// Fertility sparkle flanks
-const UNI_SPARKLE = "✦";
+// ---- Glyph pools ----
+const UNI_BODY        = ["●","◉","◆","◍","▣","⬡"];        // MOR % 6
+const UNI_BODY_ELDER  = ["◇","○","◎","□","◌","▢"];        // MOR % 6  hollow/aged
+const UNI_FOSSIL_BODY = ["▒","░","▓","╬","╪","╫"];        // GEN % 6
+const UNI_FOSSIL_HEAD = ["☉","⊗","⊙","◎","⊛","⊜"];        // GEN % 6
+const UNI_SIGIL       = ["⟡","✶","❖","✦","◈","✧"];        // GEN % 6
+const UNI_ORN         = ["✦","✧","✶","✹","❈","✷"];        // ORN % 6
+const UNI_TAIL        = ["∿","≋","∾","~","⌇","⌀"];        // MOR % 6
+const UNI_APP_L       = ["◁","(","«","⟨","╱","<"];        // APP % 6
+const UNI_APP_R       = ["▷",")",">","⟩","╲","»"];        // APP % 6
+const UNI_SPARKLE     = "✦";
 
 // ---- Grid size by lifecycle percentage ----
 function unicodeGridSize(pct) {
-  if (pct < 0.05) return 3;
-  if (pct < 0.12) return 5;
-  if (pct < 0.25) return 7;
-  if (pct < 0.40) return 9;
-  if (pct < 0.60) return 13;
-  if (pct < 0.80) return 17;
-  if (pct < 1.00) return 21;
-  return 13; // fossil
+  if (pct < 0.05) return 6;
+  if (pct < 0.12) return 10;
+  if (pct < 0.25) return 14;
+  if (pct < 0.40) return 18;
+  if (pct < 0.60) return 22;
+  if (pct < 0.80) return 26;
+  if (pct < 1.00) return 30;
+  return 18; // fossil
 }
 
 // ---- Main builder ----
 // genome : genome object
 // age    : integer days (0 = newborn)
-// Returns a multi-line string ready for <pre> display.
-//
-// The renderer fills the full grid width at every stage.
-// Grid is treated as the INTERIOR body width (in glyphs).
-// Limb chars flank the body; the whole thing is centred.
 function buildUnicodeArt(genome, age) {
   const pct    = Math.min(age / genome.LIF, 1.0);
   const fossil = pct >= 1.0;
-  const grid   = unicodeGridSize(pct);
+  const size   = unicodeGridSize(pct);
+  const cx     = size / 2;        // fractional centre x
+  const cy     = size / 2;        // fractional centre y
 
-  // Pick glyph primitives from genome seeds
-  const sigil   = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
-  const rawBody = fossil
+  // ---- Glyph selection ----
+  const bodyChar = fossil
     ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
     : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY)[genome.MOR % UNI_BODY.length];
-  const limL    = UNI_LIMB_L[genome.APP % UNI_LIMB_L.length];
-  const limR    = UNI_LIMB_R[genome.APP % UNI_LIMB_R.length];
-  const limCL   = UNI_LIMB_C[genome.APP % UNI_LIMB_C.length];
-  const limCR   = UNI_LIMB_D[genome.APP % UNI_LIMB_D.length];
-  const orn     = UNI_ORN   [genome.ORN % UNI_ORN.length];
-  const tail    = UNI_TAIL  [genome.MOR % UNI_TAIL.length];
+  const sigil   = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
+  const ornChar = UNI_ORN   [genome.ORN % UNI_ORN.length];
+  const tailChar = UNI_TAIL [genome.MOR % UNI_TAIL.length];
+  const appL    = UNI_APP_L [genome.APP % UNI_APP_L.length];
+  const appR    = UNI_APP_R [genome.APP % UNI_APP_R.length];
   const sex     = genome.SX === 0 ? "♂" : "♀";
   const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
 
-  // Mirror closing limbs
-  const closingL = limR === ")" ? "(" : limR === "}" ? "{" : limR === "⟩" ? "⟨" : limR === "▷" ? "◁" : limR === "»" ? "«" : "\\";
-  const closingR = limL === "(" ? ")" : limL === "{" ? "}" : limL === "⟨" ? "⟩" : limL === "◁" ? "▷" : limL === "«" ? "»" : "/";
+  // ---- Radii derived from genome + stage ----
+  // rx/ry: ellipse radii as fractions of size/2.
+  // MOR biases the shape; lifecycle narrows/widens it.
+  const morFrac = (genome.MOR % 1000) / 1000;   // 0.0–1.0
+  const baseRx  = 0.30 + morFrac * 0.18;        // 0.30–0.48 of size/2
+  const baseRy  = 0.38 + morFrac * 0.14;        // 0.38–0.52
+  // Stage modifiers: body shrinks slightly for elder/fossil
+  const stageScale = pct >= 0.80 ? 0.88 : 1.0;
+  const rx = baseRx * stageScale * (size / 2);
+  const ry = baseRy * stageScale * (size / 2);
 
-  // Centre a single string within (grid + limb width) total columns.
-  // fullWidth = the reference width everything is padded to match.
-  const fullWidth = grid + 2; // limL + body(grid) + limR
-  function centre(str) {
-    const pad = Math.max(0, Math.floor((fullWidth - str.length) / 2));
-    return " ".repeat(pad) + str;
+  // Appendage rows: APP determines how many side rows get flanking glyphs.
+  // Active from Child (pct>=0.12). Count scales with grid.
+  const appCount = pct >= 0.12
+    ? Math.max(1, 2 + Math.floor((genome.APP % 4) * pct))
+    : 0;
+
+  // ---- Build grid row by row ----
+  const rows = [];
+  for (let y = 0; y < size; y++) {
+    let row = "";
+    for (let x = 0; x < size; x++) {
+      // Ellipse membership test using pixel centres (+0.5)
+      const dx = (x + 0.5) - cx;
+      const dy = (y + 0.5) - cy;
+      const inside = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0;
+      if (inside) {
+        row += bodyChar;
+      } else {
+        row += " ";
+      }
+    }
+    rows.push(row);
   }
 
-  // Body row that exactly fills `grid` columns.
-  // rawBody is 1 char; repeat to fill grid, trim/pad to exact width.
-  function bodyFill(w) {
-    return rawBody.repeat(Math.ceil(w / rawBody.length)).slice(0, w);
-  }
-
-  // A full-width body row with limbs: limL + body(grid) + limR  = fullWidth chars
-  function bodyLine(lChar, rChar) {
-    return centre(lChar + bodyFill(grid) + rChar);
-  }
-
-  // Count fixed structural rows for each stage so we know how many
-  // middle/fill rows are needed to reach exactly `grid` total rows.
-  // Baby:    sigil(1) + body(1)                          = 2 fixed → need grid-2 filler body rows
-  // Toddler: sigil(1) + upper(1)                         = 2 fixed → need grid-2 filler upper rows
-  // Child+:  [orn(1)?] + sigil(1) + upper(1) + lower(1) + tail(1) = 4-5 fixed → middle fills rest
-  function fillRows(fixedCount) {
-    return Math.max(1, grid - fixedCount);
-  }
-
-  const lines = [];
-
-  // ---- FOSSIL ----
+  // ---- FOSSIL: replace body with fossil chars + crack overlay ----
   if (fossil) {
-    const fh   = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
-    const side = "[" + bodyFill(grid) + "]";
-    const mid  = bodyFill(grid + 2);
-    // fixed rows: head(1) + top-side(1) + bot-side(1) = 3
-    const midRows = fillRows(3);
-    lines.push(centre(fh));
-    lines.push(centre(side));
-    for (let i = 0; i < midRows; i++) lines.push(centre(mid));
-    lines.push(centre(side));
-    return lines.join("\n");
+    // Already using fossil bodyChar; just add bracket frame on first/last body rows
+    const firstBody = rows.findIndex(r => r.trim().length > 0);
+    const lastBody  = rows.length - 1 - [...rows].reverse().findIndex(r => r.trim().length > 0);
+    const fh = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
+    // Insert head above first body row
+    if (firstBody > 0) {
+      rows[firstBody - 1] = " ".repeat(Math.floor(size / 2)) + fh;
+    }
+    const result = rows.join("\n");
+    return result;
   }
 
-  // ---- ORNAMENT ROW (Teen+) ----
+  // ---- APPENDAGES: inject limb chars on side cells of select rows ----
+  if (appCount > 0) {
+    // Find body rows (non-empty) and pick evenly spaced ones for appendages
+    const bodyRowIdxs = rows
+      .map((r, i) => ({ i, filled: r.trim().length }))
+      .filter(r => r.filled > 0)
+      .map(r => r.i);
+    // Space appendage rows evenly across body, skipping first and last
+    const inner = bodyRowIdxs.slice(1, -1);
+    const step  = Math.max(1, Math.floor(inner.length / appCount));
+    for (let a = 0; a < appCount && a * step < inner.length; a++) {
+      const ri = inner[a * step];
+      const row = rows[ri];
+      // Find leftmost and rightmost body char positions
+      const left  = row.indexOf(bodyChar);
+      const right = row.lastIndexOf(bodyChar);
+      if (left > 0 && right < size - 1) {
+        rows[ri] =
+          row.slice(0, left - 1) + appL +
+          row.slice(left, right + 1) +
+          appR + row.slice(right + 2);
+      }
+    }
+  }
+
+  // ---- HEADER: sigil + sex (+ ornament if Teen+, sparkles if fertile) ----
+  const headerLines = [];
   if (pct >= 0.25) {
     const ornRow = fertile
       ? UNI_SPARKLE + " " + sigil + sex + " " + UNI_SPARKLE
-      : orn;
-    lines.push(centre(ornRow));
+      : ornChar;
+    headerLines.push(ornRow);
+  }
+  headerLines.push(sigil + sex);
+
+  // ---- TAIL: append below last body row (Child+) ----
+  // Find last row with body content and place tail just after
+  const lastBodyRow = rows.length - 1 - [...rows].reverse().findIndex(r => r.trim().length > 0);
+  if (pct >= 0.12 && lastBodyRow < rows.length - 1) {
+    rows[lastBodyRow + 1] = " ".repeat(Math.floor(size / 2)) + tailChar;
+  } else if (pct >= 0.12) {
+    rows.push(" ".repeat(Math.floor(size / 2)) + tailChar);
   }
 
-  // ---- SIGIL + SEX ROW (Toddler+) ----
-  if (pct >= 0.05) {
-    lines.push(centre(sigil + sex));
+  // ---- Trim blank rows from top and bottom of body grid ----
+  while (rows.length > 0 && rows[0].trim() === "") rows.shift();
+  while (rows.length > 0 && rows[rows.length - 1].trim() === "") rows.pop();
+
+  // ---- Centre helper ----
+  function centre(str, width) {
+    const pad = Math.max(0, Math.floor((width - str.length) / 2));
+    return " ".repeat(pad) + str;
   }
 
-  // ---- BABY: sigil + body rows filling grid vertically ----
-  if (pct < 0.05) {
-    lines.push(centre(sigil));                    // 1 fixed header
-    const bodyRows = fillRows(1);
-    for (let i = 0; i < bodyRows; i++) {
-      lines.push(centre(bodyFill(grid)));
-    }
-    return lines.join("\n");
-  }
+  // ---- Combine header + body rows ----
+  // Total target = size lines exactly.
+  // headerLines sit first; remaining lines come from body rows.
+  // If body rows + header < size, pad with empty lines at bottom.
+  // If body rows + header > size, trim from bottom (shouldn't happen normally).
+  const combined = [
+    ...headerLines.map(h => centre(h, size)),
+    ...rows
+  ];
+  while (combined.length < size) combined.push("");
+  while (combined.length > size) combined.pop();
 
-  // ---- UPPER LIMB ROW (Toddler+) ----
-  lines.push(bodyLine(limL, limR));
-
-  // ---- MIDDLE BODY ROWS: fills remaining space ----
-  // Fixed rows so far: [orn?](1) + sigil(1) + upper(1) = 3 or 2
-  // Still to add:      lower(1) + tail(1)               = 2  (Child+)
-  if (pct >= 0.12) {
-    const fixedTotal = (pct >= 0.25 ? 1 : 0) + 1 + 1 + 1 + 1; // orn+sigil+upper+lower+tail
-    const midRows = fillRows(fixedTotal);
-    for (let i = 0; i < midRows; i++) {
-      lines.push(bodyLine(limCL, limCR));
-    }
-  } else {
-    // Toddler: no lower/tail — fill with upper-style rows
-    const fixedTotal = 1 + 1; // sigil + upper already pushed
-    const midRows = fillRows(fixedTotal);
-    for (let i = 0; i < midRows; i++) {
-      lines.push(bodyLine(limL, limR));
-    }
-  }
-
-  // ---- LOWER LIMB ROW (Child+) ----
-  if (pct >= 0.12) {
-    lines.push(bodyLine(closingL, closingR));
-  }
-
-  // ---- TAIL (Child+) ----
-  if (pct >= 0.12) {
-    lines.push(centre(tail));
-  }
-
-  return lines.join("\n");
+  return combined.join("\n");
 }
-
 // ============================================================
 // ROUTE VIEWS
 // ============================================================
