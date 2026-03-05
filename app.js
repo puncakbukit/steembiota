@@ -16,16 +16,19 @@ function randomInt(max) {
 }
 
 function generateGenome() {
+  const LIF       = 80 + randomInt(80);
+  const FRT_START = Math.min(20 + randomInt(20), LIF - 10);
+  const FRT_END   = Math.min(60 + randomInt(20), LIF - 1);
   return {
-    GEN:       randomInt(1000),
-    SX:        randomInt(2),      // 0 = male, 1 = female
-    MOR:       randomInt(9999),
-    APP:       randomInt(9999),
-    ORN:       randomInt(9999),
-    CLR:       randomInt(360),
-    LIF:       80 + randomInt(80),
-    FRT_START: 20,
-    FRT_END:   60
+    GEN: randomInt(1000),
+    SX:  randomInt(2),      // 0 = male, 1 = female
+    MOR: randomInt(9999),
+    APP: randomInt(9999),
+    ORN: randomInt(9999),
+    CLR: randomInt(360),
+    LIF,
+    FRT_START,
+    FRT_END
   };
 }
 
