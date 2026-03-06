@@ -677,40 +677,45 @@ const HomeView = {
         </div>
       </div>
 
-      <!-- Canvas render — age + feedState drive full lifecycle visual evolution -->
-      <creature-canvas-component :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
+      <!-- Canvas, genome, and publish — only meaningful for @steembiota (founder creator) -->
+      <template v-if="isFounderAccount">
 
-      <!-- Fossil overlay label -->
-      <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
-        🦴 This creature has fossilised. Its genome is preserved on-chain.
-      </div>
+        <!-- Canvas render — age + feedState drive full lifecycle visual evolution -->
+        <creature-canvas-component :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
 
-      <!-- Genome table -->
-      <div v-if="genome">
-        <h3 style="color:#a5d6a7;margin:16px 0 4px;">Genome</h3>
-        <genome-table-component :genome="genome"></genome-table-component>
+        <!-- Fossil overlay label -->
+        <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
+          🦴 This creature has fossilised. Its genome is preserved on-chain.
+        </div>
 
-        <!-- Unicode art -->
-        <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
-        <pre :style="fossil ? { color: '#444', opacity: '0.6' } : {}">{{ unicodeArt }}</pre>
+        <!-- Genome table -->
+        <div v-if="genome">
+          <h3 style="color:#a5d6a7;margin:16px 0 4px;">Genome</h3>
+          <genome-table-component :genome="genome"></genome-table-component>
 
-        <!-- Publish button -->
-        <br/>
-        <button
-          @click="publishCreature"
-          :disabled="publishing || !username"
-          style="background:#1565c0;"
-        >
-          {{ publishing ? "Publishing…" : "📡 Publish to Steem" }}
-        </button>
-        <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">
-          Log in to publish your creature.
+          <!-- Unicode art -->
+          <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
+          <pre :style="fossil ? { color: '#444', opacity: '0.6' } : {}">{{ unicodeArt }}</pre>
+
+          <!-- Publish button -->
+          <br/>
+          <button
+            @click="publishCreature"
+            :disabled="publishing || !username"
+            style="background:#1565c0;"
+          >
+            {{ publishing ? "Publishing…" : "📡 Publish to Steem" }}
+          </button>
+          <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">
+            Log in to publish your creature.
+          </p>
+        </div>
+
+        <p v-else style="color:#666;margin-top:24px;">
+          Press <strong>Create Founder Creature</strong> to generate your first organism.
         </p>
-      </div>
 
-      <p v-else style="color:#666;margin-top:24px;">
-        Press <strong>Create Founder Creature</strong> to generate your first organism.
-      </p>
+      </template>
 
       <!-- Feeding panel -->
       <feeding-panel-component
