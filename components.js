@@ -929,10 +929,12 @@ const BreedingPanelComponent = {
       urlB:        "",
       loading:     false,
       loadError:   "",
+      genomeA:     null,   // loaded parent genome (for sex display)
+      genomeB:     null,
       childGenome: null,
       childName:   null,
       childArt:    null,
-      breedInfo:   null,   // { mutated, speciated }
+      breedInfo:   null,
       publishing:  false,
     };
   },
@@ -940,6 +942,14 @@ const BreedingPanelComponent = {
     sexLabel() {
       if (!this.childGenome) return "";
       return this.childGenome.SX === 0 ? "♂ Male" : "♀ Female";
+    },
+    parentASex() {
+      if (!this.genomeA) return "";
+      return this.genomeA.SX === 0 ? "♂ Male" : "♀ Female";
+    },
+    parentBSex() {
+      if (!this.genomeB) return "";
+      return this.genomeB.SX === 0 ? "♂ Male" : "♀ Female";
     },
     mutationLabel() {
       if (!this.breedInfo) return "";
@@ -957,6 +967,8 @@ const BreedingPanelComponent = {
   methods: {
     async breedCreatures() {
       this.loadError   = "";
+      this.genomeA     = null;
+      this.genomeB     = null;
       this.childGenome = null;
       this.childArt    = null;
       this.breedInfo   = null;
@@ -978,6 +990,10 @@ const BreedingPanelComponent = {
           loadGenomeFromPost(ua),
           loadGenomeFromPost(ub)
         ]);
+        // Store parent genomes for sex display before attempting breed
+        this.genomeA = resA.genome;
+        this.genomeB = resB.genome;
+
         const { child, mutated, speciated } = breedGenomes(resA.genome, resB.genome);
         this.childGenome = child;
         this.childName   = generateFullName(child);
@@ -1030,21 +1046,46 @@ const BreedingPanelComponent = {
   },
   template: `
     <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
-      <h3 style="color:#80deea;margin:0 0 12px;">🧬 Breed Creatures</h3>
+      <h3 style="color:#80deea;margin:0 0 4px;">🧬 Breed Creatures</h3>
+      <p style="font-size:12px;color:#555;margin:0 0 12px;">Requires one ♂ Male and one ♀ Female of the same genus.</p>
 
       <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
-        <input
-          v-model="urlA"
-          type="text"
-          placeholder="Parent A — Steem post URL"
-          style="font-size:13px;"
-        />
-        <input
-          v-model="urlB"
-          type="text"
-          placeholder="Parent B — Steem post URL"
-          style="font-size:13px;"
-        />
+        <!-- Parent A -->
+        <div style="position:relative;">
+          <input
+            v-model="urlA"
+            type="text"
+            placeholder="Parent A — Steem post URL"
+            style="font-size:13px;width:100%;padding-right:70px;"
+          />
+          <span
+            v-if="genomeA"
+            :style="{
+              position:'absolute', right:'10px', top:'50%', transform:'translateY(-50%)',
+              fontSize:'12px', fontWeight:'bold',
+              color: genomeA.SX === 0 ? '#90caf9' : '#f48fb1',
+              pointerEvents:'none'
+            }"
+          >{{ parentASex }}</span>
+        </div>
+        <!-- Parent B -->
+        <div style="position:relative;">
+          <input
+            v-model="urlB"
+            type="text"
+            placeholder="Parent B — Steem post URL"
+            style="font-size:13px;width:100%;padding-right:70px;"
+          />
+          <span
+            v-if="genomeB"
+            :style="{
+              position:'absolute', right:'10px', top:'50%', transform:'translateY(-50%)',
+              fontSize:'12px', fontWeight:'bold',
+              color: genomeB.SX === 0 ? '#90caf9' : '#f48fb1',
+              pointerEvents:'none'
+            }"
+          >{{ parentBSex }}</span>
+        </div>
         <button
           @click="breedCreatures"
           :disabled="loading"

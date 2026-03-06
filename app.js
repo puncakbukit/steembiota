@@ -11,6 +11,9 @@ const { createRouter, createWebHashHistory, useRoute } = VueRouter;
 // STEEMBIOTA GENOME HELPERS (pure functions, no DOM)
 // ============================================================
 
+// Only this account may generate and publish founder creatures.
+const FOUNDER_ACCOUNT = "steembiota";
+
 function randomInt(max) {
   return Math.floor(Math.random() * max);
 }
@@ -122,6 +125,13 @@ function breedGenomes(a, b) {
     throw new Error(
       "Genus mismatch: GEN " + a.GEN + " ≠ GEN " + b.GEN +
       ". Only same-genus creatures can breed."
+    );
+  }
+  if (a.SX === b.SX) {
+    const sexName = a.SX === 0 ? "Male" : "Female";
+    throw new Error(
+      "Sex mismatch: both creatures are " + sexName +
+      ". Breeding requires one ♂ Male and one ♀ Female."
     );
   }
 
@@ -558,6 +568,9 @@ const HomeView = {
     },
     lifecycleIcon() {
       return this.lifecycleStage ? this.lifecycleStage.icon : "";
+    },
+    isFounderAccount() {
+      return this.username === FOUNDER_ACCOUNT;
     }
   },
   watch: {
@@ -570,6 +583,10 @@ const HomeView = {
   },
   methods: {
     createFounder() {
+      if (!this.isFounderAccount) {
+        this.notify("Only @" + FOUNDER_ACCOUNT + " can create founder creatures.", "error");
+        return;
+      }
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
       this.feedState      = null;
@@ -579,6 +596,10 @@ const HomeView = {
     async publishCreature() {
       if (!this.username) {
         this.notify("Please log in first.", "error");
+        return;
+      }
+      if (!this.isFounderAccount) {
+        this.notify("Only @" + FOUNDER_ACCOUNT + " can publish founder creatures.", "error");
         return;
       }
       if (!this.genome) {
@@ -605,8 +626,15 @@ const HomeView = {
   template: `
     <div style="margin-top:20px;padding:0 16px;">
 
-      <!-- Create button -->
-      <button @click="createFounder">🌱 Create Founder Creature</button>
+      <!-- Create button — restricted to @steembiota -->
+      <div v-if="isFounderAccount">
+        <button @click="createFounder">🌱 Create Founder Creature</button>
+      </div>
+      <div v-else style="margin:10px auto;padding:10px 16px;max-width:520px;border:1px solid #333;border-radius:6px;background:#111;color:#666;font-size:13px;">
+        🌿 Founder creatures are created exclusively by
+        <strong style="color:#a5d6a7;">@steembiota</strong>.
+        All other creatures arise through <strong style="color:#80deea;">breeding</strong>.
+      </div>
 
       <!-- Identity header -->
       <div v-if="creatureName" style="margin:16px 0 6px;">
