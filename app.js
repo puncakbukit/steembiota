@@ -355,28 +355,28 @@ function buildUnicodeArt(genome, age, feedState) {
   const cx     = size / 2;        // fractional centre x
   const cy     = size / 2;        // fractional centre y
 
-  // ---- Glyph selection ----
-  const bodyChar = fossil
-    ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
-    : activeBodyPool[genome.MOR % activeBodyPool.length];
-  const sigil   = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
-  const ornChar = UNI_ORN   [genome.ORN % UNI_ORN.length];
-  const tailChar = UNI_TAIL [genome.MOR % UNI_TAIL.length];
-  const appL    = UNI_APP_L [genome.APP % UNI_APP_L.length];
-  const appR    = UNI_APP_R [genome.APP % UNI_APP_R.length];
-  const sex     = genome.SX === 0 ? "♂" : "♀";
-  const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
-
-  // Health symbol from feedState — replaces ornChar when hungry, prefixes header when thriving
+  // ---- Health / feed state ----
   const healthSymbol = feedState ? feedState.symbol : "•";
   const isWeak       = feedState && feedState.healthPct === 0;
   const isThriving   = feedState && feedState.healthPct >= 0.80;
 
-  // Weak creatures use a dimmer body glyph pool
-  const UNI_BODY_WEAK = ["░","▒","·","∘","◌","○"];
+  // Weak creatures use a dimmer body glyph pool — must be declared before bodyChar
+  const UNI_BODY_WEAK  = ["░","▒","·","∘","◌","○"];
   const activeBodyPool = isWeak
     ? UNI_BODY_WEAK
     : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY);
+
+  // ---- Glyph selection ----
+  const bodyChar = fossil
+    ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
+    : activeBodyPool[genome.MOR % activeBodyPool.length];
+  const sigil    = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
+  const ornChar  = UNI_ORN   [genome.ORN % UNI_ORN.length];
+  const tailChar = UNI_TAIL  [genome.MOR % UNI_TAIL.length];
+  const appL     = UNI_APP_L [genome.APP % UNI_APP_L.length];
+  const appR     = UNI_APP_R [genome.APP % UNI_APP_R.length];
+  const sex      = genome.SX === 0 ? "♂" : "♀";
+  const fertile  = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
 
   // ---- Radii derived from genome + stage ----
   // rx/ry: ellipse radii as fractions of size/2.
