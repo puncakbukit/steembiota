@@ -570,7 +570,12 @@ const HomeView = {
       return this.lifecycleStage ? this.lifecycleStage.icon : "";
     },
     isFounderAccount() {
-      return this.username === FOUNDER_ACCOUNT;
+      // username is injected as a Vue ref from the root App.
+      // Unwrap .value if it's a ref, fall back to the value itself otherwise.
+      const name = this.username && typeof this.username === "object"
+        ? this.username.value
+        : this.username;
+      return name === FOUNDER_ACCOUNT;
     }
   },
   watch: {
