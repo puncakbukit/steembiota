@@ -252,6 +252,68 @@ function isFossil(age, genome) {
 }
 
 // ============================================================
+// STEEMBIOTA FEEDING SYSTEM
+// Derives life-state bonuses from blockchain feed events.
+// All logic is pure and deterministic — genome never changes.
+// ============================================================
+
+// FOOD_EFFECTS — static config, easy to extend for phase-2 types.
+const FOOD_EFFECTS = {
+  nectar:  { lifespanPerFeed: 1.0, fertilityBoost: 0.00, label: "Nectar",  emoji: "🍯" },
+  fruit:   { lifespanPerFeed: 0.5, fertilityBoost: 0.10, label: "Fruit",   emoji: "🍎" },
+  crystal: { lifespanPerFeed: 0.0, fertilityBoost: 0.05, label: "Crystal", emoji: "💎" },
+};
+
+// Feed-strength weights: owner feeds count 3×, community 1×.
+const OWNER_FEED_WEIGHT     = 3;
+const COMMUNITY_FEED_WEIGHT = 1;
+
+// computeFeedState — pure function.
+// feedEvents : result of parseFeedEvents() — { total, ownerFeeds, communityFeeds, byFeeder }
+// genome     : genome object (used to derive the lifespan cap)
+// Returns a feedState object consumed by renderers.
+function computeFeedState(feedEvents, genome) {
+  if (!feedEvents || feedEvents.total === 0) {
+    return {
+      weightedScore:  0,   // 0–(20*OWNER + 20*COMMUNITY) combined
+      lifespanBonus:  0,   // extra days added to effective lifespan
+      fertilityBoost: 0,   // additive fraction on fertility window chance
+      healthPct:      0,   // 0.0–1.0 visual health level
+      label:          "Unfed",
+      symbol:         "·"  // unicode health indicator
+    };
+  }
+
+  const { total, ownerFeeds, communityFeeds } = feedEvents;
+
+  // Weighted score — drives visual health
+  const weightedScore =
+    ownerFeeds    * OWNER_FEED_WEIGHT +
+    communityFeeds * COMMUNITY_FEED_WEIGHT;
+
+  // Max possible score at cap (20 owner feeds = 60, or 20 community = 20)
+  const maxScore = 20 * OWNER_FEED_WEIGHT;
+  const healthPct = Math.min(weightedScore / maxScore, 1.0);
+
+  // Lifespan bonus: +1 day per feed, capped at 20% of base LIF
+  const maxLifespanBonus = Math.floor(genome.LIF * 0.20);
+  const lifespanBonus    = Math.min(total, maxLifespanBonus);
+
+  // Fertility boost: flat additive per community feed (owner feeds don't stack here)
+  const fertilityBoost = Math.min(communityFeeds * 0.05, 0.25); // max +25%
+
+  // Health label and unicode symbol
+  let label, symbol;
+  if      (healthPct >= 0.80) { label = "Thriving";  symbol = "✨"; }
+  else if (healthPct >= 0.55) { label = "Well-fed";  symbol = "✦";  }
+  else if (healthPct >= 0.30) { label = "Nourished"; symbol = "•";  }
+  else if (healthPct >  0.00) { label = "Hungry";    symbol = "·";  }
+  else                         { label = "Unfed";     symbol = "·";  }
+
+  return { weightedScore, lifespanBonus, fertilityBoost, healthPct, label, symbol };
+}
+
+// ============================================================
 // STEEMBIOTA UNICODE ART SYSTEM v2
 // Radial distance-field renderer — organic oval body shape.
 // Grid grows with lifecycle stage; all values are deterministic.
@@ -282,10 +344,12 @@ function unicodeGridSize(pct) {
 }
 
 // ---- Main builder ----
-// genome : genome object
-// age    : integer days (0 = newborn)
-function buildUnicodeArt(genome, age) {
-  const pct    = Math.min(age / genome.LIF, 1.0);
+// genome    : genome object
+// age       : integer days (0 = newborn)
+// feedState : optional object from computeFeedState() — affects glyphs
+function buildUnicodeArt(genome, age, feedState) {
+  const effectiveLIF = genome.LIF + (feedState ? feedState.lifespanBonus : 0);
+  const pct    = Math.min(age / effectiveLIF, 1.0);
   const fossil = pct >= 1.0;
   const size   = unicodeGridSize(pct);
   const cx     = size / 2;        // fractional centre x
@@ -294,7 +358,7 @@ function buildUnicodeArt(genome, age) {
   // ---- Glyph selection ----
   const bodyChar = fossil
     ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
-    : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY)[genome.MOR % UNI_BODY.length];
+    : activeBodyPool[genome.MOR % activeBodyPool.length];
   const sigil   = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
   const ornChar = UNI_ORN   [genome.ORN % UNI_ORN.length];
   const tailChar = UNI_TAIL [genome.MOR % UNI_TAIL.length];
@@ -302,6 +366,17 @@ function buildUnicodeArt(genome, age) {
   const appR    = UNI_APP_R [genome.APP % UNI_APP_R.length];
   const sex     = genome.SX === 0 ? "♂" : "♀";
   const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+
+  // Health symbol from feedState — replaces ornChar when hungry, prefixes header when thriving
+  const healthSymbol = feedState ? feedState.symbol : "•";
+  const isWeak       = feedState && feedState.healthPct === 0;
+  const isThriving   = feedState && feedState.healthPct >= 0.80;
+
+  // Weak creatures use a dimmer body glyph pool
+  const UNI_BODY_WEAK = ["░","▒","·","∘","◌","○"];
+  const activeBodyPool = isWeak
+    ? UNI_BODY_WEAK
+    : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY);
 
   // ---- Radii derived from genome + stage ----
   // rx/ry: ellipse radii as fractions of size/2.
@@ -377,15 +452,21 @@ function buildUnicodeArt(genome, age) {
     }
   }
 
-  // ---- HEADER: sigil + sex (+ ornament if Teen+, sparkles if fertile) ----
+  // ---- HEADER: sigil + sex (+ ornament if Teen+, sparkles if fertile, health if fed) ----
   const headerLines = [];
   if (pct >= 0.25) {
     const ornRow = fertile
       ? UNI_SPARKLE + " " + sigil + sex + " " + UNI_SPARKLE
-      : ornChar;
+      : isThriving
+        ? healthSymbol + " " + ornChar + " " + healthSymbol
+        : ornChar;
     headerLines.push(ornRow);
   }
-  headerLines.push(sigil + sex);
+  // Prepend health symbol to sigil line when creature has any feed state
+  const sigilLine = feedState && feedState.healthPct > 0
+    ? healthSymbol + sigil + sex
+    : sigil + sex;
+  headerLines.push(sigilLine);
 
   // ---- TAIL: append below last body row (Child+) ----
   // Find last row with body content and place tail just after
@@ -432,15 +513,17 @@ const HomeView = {
     CreatureCanvasComponent,
     GenomeTableComponent,
     LoadingSpinnerComponent,
-    BreedingPanelComponent
+    BreedingPanelComponent,
+    FeedingPanelComponent
   },
   data() {
     return {
       genome:         null,
       unicodeArt:     "",
       publishing:     false,
-      birthTimestamp: null,   // set at creation time; mimics post.created
-      now:            new Date()
+      birthTimestamp: null,
+      now:            new Date(),
+      feedState:      null    // computed from parseFeedEvents + computeFeedState
     };
   },
   created() {
@@ -466,7 +549,9 @@ const HomeView = {
       return this.genome ? getLifecycleStage(this.age, this.genome) : null;
     },
     fossil() {
-      return this.genome ? isFossil(this.age, this.genome) : false;
+      if (!this.genome) return false;
+      const effectiveLIF = this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
+      return this.age >= effectiveLIF;
     },
     lifecycleColor() {
       return this.lifecycleStage ? this.lifecycleStage.color : "#888";
@@ -477,14 +562,18 @@ const HomeView = {
   },
   watch: {
     age(newAge) {
-      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, newAge);
+      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, newAge, this.feedState);
+    },
+    feedState(fs) {
+      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs);
     }
   },
   methods: {
     createFounder() {
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
-      this.unicodeArt     = buildUnicodeArt(this.genome, 0);
+      this.feedState      = null;
+      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null);
     },
 
     async publishCreature() {
@@ -526,7 +615,7 @@ const HomeView = {
         </div>
         <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
 
-        <!-- Age + lifecycle badge -->
+        <!-- Age + lifecycle + health badges -->
         <div style="margin-top:8px;display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
           <span style="font-size:0.85rem;color:#aaa;">
             Age: <strong style="color:#eee;">{{ age }} day{{ age === 1 ? '' : 's' }}</strong>
@@ -535,15 +624,28 @@ const HomeView = {
             {{ lifecycleIcon }} {{ lifecycleStage.name }}
           </span>
           <span style="font-size:0.8rem;color:#666;">
-            Lifespan: {{ genome.LIF }} days
+            Lifespan: {{ genome.LIF + (feedState ? feedState.lifespanBonus : 0) }} days
+            <template v-if="feedState && feedState.lifespanBonus > 0">
+              <span style="color:#66bb6a;">(+{{ feedState.lifespanBonus }}🍃)</span>
+            </template>
             &nbsp;·&nbsp;
             Fertile: {{ genome.FRT_START }}–{{ genome.FRT_END }}
           </span>
+          <!-- Health badge — only shown when feedState is known -->
+          <span
+            v-if="feedState"
+            :style="{
+              fontSize: '0.80rem', fontWeight: 'bold',
+              color: feedState.healthPct >= 0.55 ? '#a5d6a7' : feedState.healthPct >= 0.30 ? '#ffb74d' : '#888',
+              border: '1px solid ' + (feedState.healthPct >= 0.55 ? '#388e3c' : feedState.healthPct >= 0.30 ? '#f57c00' : '#444'),
+              borderRadius: '12px', padding: '2px 10px'
+            }"
+          >{{ feedState.symbol }} {{ feedState.label }}</span>
         </div>
       </div>
 
-      <!-- Canvas render — age drives full lifecycle visual evolution -->
-      <creature-canvas-component :genome="genome" :age="age" :fossil="fossil"></creature-canvas-component>
+      <!-- Canvas render — age + feedState drive full lifecycle visual evolution -->
+      <creature-canvas-component :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
 
       <!-- Fossil overlay label -->
       <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
@@ -577,7 +679,14 @@ const HomeView = {
         Press <strong>Create Founder Creature</strong> to generate your first organism.
       </p>
 
-      <!-- Breeding panel — always visible -->
+      <!-- Feeding panel -->
+      <feeding-panel-component
+        :username="username"
+        @notify="(msg,type) => notify(msg,type)"
+        @feed-state-updated="(fs) => { feedState = fs }"
+      ></feeding-panel-component>
+
+      <!-- Breeding panel -->
       <breeding-panel-component
         :username="username"
         @notify="(msg,type) => notify(msg,type)"
@@ -842,6 +951,7 @@ vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
 vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
+vueApp.component("FeedingPanelComponent",       FeedingPanelComponent);
 
 vueApp.use(router);
 vueApp.mount("#app");

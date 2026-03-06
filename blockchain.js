@@ -258,6 +258,106 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
   );
 }
 
+// ---- SteemBiota — publish a feeding event as a reply ----
+//
+// creatureAuthor  : string — author of the creature post
+// creaturePermlink: string — permlink of the creature post
+// creatureName    : string — display name for the reply body
+// foodType        : "nectar" | "fruit" | "crystal"
+// callback        : (response) => { response.success, response.message }
+function publishFeed(username, creatureAuthor, creaturePermlink, creatureName, foodType, callback) {
+  const permlink = buildPermlink("steembiota-feed-" + creatureName.toLowerCase());
+
+  const foodEmoji = { nectar: "🍯", fruit: "🍎", crystal: "💎" }[foodType] || "🍃";
+  const foodLabel = { nectar: "Nectar", fruit: "Fruit", crystal: "Crystal" }[foodType] || foodType;
+
+  const body =
+    `${foodEmoji} **Feeding Event** — ${foodLabel}\n\n` +
+    `@${username} fed **${creatureName}** with ${foodLabel}.\n\n` +
+    `\`\`\`\nSTEEMBIOTA_FEED\ncreature: @${creatureAuthor}/${creaturePermlink}\nfood: ${foodType}\nfeeder: ${username}\n\`\`\`\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution]*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota"],
+    steembiota: {
+      version: "1.0",
+      type: "feed",
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      feeder: username,
+      food: foodType,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(
+    username, "", body,
+    creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink,
+    ["steembiota"],
+    callback
+  );
+}
+
+// ---- SteemBiota — parse feeding events from a flat reply list ----
+//
+// replies        : array from fetchAllReplies()
+// creatureAuthor : string — owner of the creature post
+//
+// Returns: { total, ownerFeeds, communityFeeds, byFeeder }
+// — total      : number of valid (deduplicated) feed events (capped at 20)
+// — ownerFeeds : count by the creature owner
+// — communityFeeds : count by others
+// — byFeeder   : Map<username, count> (used for per-day dedup and display)
+//
+// Anti-spam rules enforced here (read-side):
+//   1. Only replies whose json_metadata.steembiota.type === "feed" are counted
+//   2. Each (feeder, UTC-day) pair is counted at most once
+//   3. Total cap: 20 feeds maximum
+function parseFeedEvents(replies, creatureAuthor) {
+  // Track (feeder + UTC-day) pairs already counted
+  const seen      = new Set();
+  const byFeeder  = {};
+  let total       = 0;
+  let ownerFeeds  = 0;
+  let communityFeeds = 0;
+
+  // Sort ascending by created so earlier feeds take priority under the cap
+  const sorted = [...replies].sort((a, b) =>
+    new Date(a.created) - new Date(b.created)
+  );
+
+  for (const reply of sorted) {
+    if (total >= 20) break;
+
+    let meta;
+    try {
+      meta = JSON.parse(reply.json_metadata || "{}");
+    } catch { continue; }
+
+    if (!meta.steembiota || meta.steembiota.type !== "feed") continue;
+
+    const feeder  = reply.author;
+    const created = reply.created;
+    // UTC day string used as dedup key — e.g. "2025-07-04"
+    const utcDay  = (typeof created === "string"
+      ? new Date(created.endsWith("Z") ? created : created + "Z")
+      : new Date(created)
+    ).toISOString().slice(0, 10);
+
+    const key = `${feeder}::${utcDay}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    byFeeder[feeder] = (byFeeder[feeder] || 0) + 1;
+    total++;
+    if (feeder === creatureAuthor) ownerFeeds++;
+    else communityFeeds++;
+  }
+
+  return { total, ownerFeeds, communityFeeds, byFeeder };
+}
+
 // ---- Utility ----
 
 function buildPermlink(title) {
