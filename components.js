@@ -907,12 +907,13 @@ const GlobalProfileBannerComponent = {
 const FeedingPanelComponent = {
   name: "FeedingPanelComponent",
   props: {
-    username: String
+    username:   String,
+    initialUrl: { type: String, default: "" }   // pre-fill + auto-load from CreatureView
   },
   emits: ["notify", "feed-state-updated"],
   data() {
     return {
-      postUrl:          "",
+      postUrl:          this.initialUrl || "",
       foodType:         "nectar",
       loading:          false,
       loadError:        "",
@@ -926,6 +927,10 @@ const FeedingPanelComponent = {
       // Rate-limit check
       alreadyFedToday:  false,
     };
+  },
+  created() {
+    // If the creature page passed in a URL, load automatically
+    if (this.initialUrl) this.loadCreature();
   },
   computed: {
     foodOptions() {
@@ -1166,12 +1171,13 @@ const FeedingPanelComponent = {
 const BreedingPanelComponent = {
   name: "BreedingPanelComponent",
   props: {
-    username: String
+    username:    String,
+    initialUrlA: { type: String, default: "" }   // pre-fill Parent A from CreatureView
   },
   emits: ["notify"],
   data() {
     return {
-      urlA:        "",
+      urlA:        this.initialUrlA || "",
       urlB:        "",
       loading:     false,
       loadError:   "",

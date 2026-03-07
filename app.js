@@ -713,11 +713,7 @@ const HomeView = {
       <div v-if="isFounderAccount">
         <button @click="createFounder">🌱 Create Founder Creature</button>
       </div>
-      <div v-else style="margin:10px auto;padding:10px 16px;max-width:520px;border:1px solid #333;border-radius:6px;background:#111;color:#666;font-size:13px;">
-        🌿 Founder creatures are created exclusively by
-        <strong style="color:#a5d6a7;">@steembiota</strong>.
-        All other creatures arise through <strong style="color:#80deea;">breeding</strong>.
-      </div>
+      <div v-else></div>
 
       <!-- Identity header -->
       <div v-if="creatureName" style="margin:16px 0 6px;">
@@ -890,14 +886,203 @@ const ProfileView = {
   `
 };
 
-// ============================================================
-// ROUTER
-// ============================================================
+// ---- CreatureView ----
+// Route: /@:author/:permlink
+// Loads a published SteemBiota post, renders the creature,
+// and provides Feed + Breed interaction panels.
+const CreatureView = {
+  name: "CreatureView",
+  inject: ["username", "notify"],
+  components: {
+    CreatureCanvasComponent,
+    GenomeTableComponent,
+    LoadingSpinnerComponent,
+    FeedingPanelComponent,
+    BreedingPanelComponent
+  },
+  data() {
+    return {
+      loading:    true,
+      loadError:  null,
+      genome:     null,
+      name:       null,
+      author:     null,
+      permlink:   null,
+      postAge:    null,   // days since creation stored in json_metadata
+      feedState:  null,
+      now:        new Date()
+    };
+  },
+  created() {
+    this._ticker = setInterval(() => { this.now = new Date(); }, 60000);
+    this.loadCreature();
+  },
+  beforeUnmount() {
+    clearInterval(this._ticker);
+  },
+  computed: {
+    sexLabel() {
+      return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : "";
+    },
+    lifecycleStage() {
+      return this.genome ? getLifecycleStage(this.postAge ?? 0, this.genome) : null;
+    },
+    fossil() {
+      if (!this.genome) return false;
+      const effectiveLIF = this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
+      return (this.postAge ?? 0) >= effectiveLIF;
+    },
+    unicodeArt() {
+      return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState) : "";
+    },
+    steemitUrl() {
+      if (!this.author || !this.permlink) return null;
+      return `https://steemit.com/@${this.author}/${this.permlink}`;
+    },
+    breedPrefilledUrl() {
+      if (!this.author || !this.permlink) return null;
+      return `https://steemit.com/@${this.author}/${this.permlink}`;
+    }
+  },
+  methods: {
+    async loadCreature() {
+      this.loading   = true;
+      this.loadError = null;
+      const { author, permlink } = this.$route.params;
+      this.author   = author;
+      this.permlink = permlink;
+      try {
+        const post = await fetchPost(author, permlink);
+        if (!post || !post.author) throw new Error("Post not found.");
+
+        let meta = {};
+        try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
+        if (!meta.steembiota) throw new Error("This post is not a SteemBiota creature.");
+
+        this.genome  = meta.steembiota.genome;
+        this.name    = meta.steembiota.name || author;
+        this.postAge = meta.steembiota.age ?? 0;
+
+        // Load feed events and compute health state
+        const replies        = await fetchAllReplies(author, permlink);
+        const feedEvents     = parseFeedEvents(replies, author);
+        this.feedState       = computeFeedState(feedEvents, this.genome);
+      } catch (err) {
+        this.loadError = err.message || "Failed to load creature.";
+      }
+      this.loading = false;
+    },
+    onFeedStateUpdated(fs) {
+      this.feedState = fs;
+    }
+  },
+
+  template: `
+    <div style="margin-top:20px;padding:0 16px;">
+
+      <loading-spinner-component v-if="loading"></loading-spinner-component>
+
+      <div v-else-if="loadError" style="color:#ff8a80;margin-top:24px;">
+        ⚠ {{ loadError }}
+        <br/><br/>
+        <router-link to="/" style="color:#66bb6a;">← Back to Home</router-link>
+      </div>
+
+      <template v-else-if="genome">
+
+        <!-- Identity header -->
+        <div style="margin-bottom:12px;">
+          <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
+            ❇ {{ name }}
+          </div>
+          <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
+
+          <!-- Badges row -->
+          <div style="margin-top:8px;display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
+            <span style="font-size:0.85rem;color:#aaa;">
+              Age: <strong style="color:#eee;">{{ postAge }} day{{ postAge === 1 ? '' : 's' }}</strong>
+            </span>
+            <span
+              v-if="lifecycleStage"
+              :style="{ fontSize:'0.82rem', fontWeight:'bold', color:lifecycleStage.color,
+                        border:'1px solid '+lifecycleStage.color, borderRadius:'12px', padding:'2px 10px' }"
+            >{{ lifecycleStage.icon }} {{ lifecycleStage.name }}</span>
+            <span style="font-size:0.8rem;color:#666;">
+              Lifespan: {{ genome.LIF + (feedState ? feedState.lifespanBonus : 0) }} days
+              <template v-if="feedState && feedState.lifespanBonus > 0">
+                <span style="color:#66bb6a;">(+{{ feedState.lifespanBonus }}🍃)</span>
+              </template>
+              &nbsp;·&nbsp; Fertile: {{ genome.FRT_START }}–{{ genome.FRT_END }}
+            </span>
+            <span
+              v-if="feedState"
+              :style="{
+                fontSize:'0.80rem', fontWeight:'bold',
+                color: feedState.healthPct >= 0.55 ? '#a5d6a7' : feedState.healthPct >= 0.30 ? '#ffb74d' : '#888',
+                border:'1px solid '+(feedState.healthPct >= 0.55 ? '#388e3c' : feedState.healthPct >= 0.30 ? '#f57c00' : '#444'),
+                borderRadius:'12px', padding:'2px 10px'
+              }"
+            >{{ feedState.symbol }} {{ feedState.label }}</span>
+          </div>
+        </div>
+
+        <!-- Canvas render -->
+        <creature-canvas-component
+          :genome="genome"
+          :age="postAge"
+          :fossil="fossil"
+          :feed-state="feedState"
+        ></creature-canvas-component>
+
+        <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
+          🦴 This creature has fossilised. Its genome is preserved on-chain.
+        </div>
+
+        <!-- Unicode render -->
+        <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
+        <pre :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
+
+        <!-- Genome table -->
+        <h3 style="color:#a5d6a7;margin:16px 0 4px;">Genome</h3>
+        <genome-table-component :genome="genome"></genome-table-component>
+
+        <!-- Steem post link -->
+        <div v-if="steemitUrl" style="margin:16px 0;font-size:13px;color:#666;">
+          📄 <a :href="steemitUrl" target="_blank" style="color:#80deea;">View original post on Steemit</a>
+          &nbsp;·&nbsp;
+          <span style="color:#444;">@{{ author }}/{{ permlink }}</span>
+        </div>
+
+        <hr/>
+
+        <!-- Feed panel — pre-loaded with this creature's URL -->
+        <feeding-panel-component
+          :username="username"
+          :initial-url="steemitUrl"
+          @notify="(msg,type) => notify(msg,type)"
+          @feed-state-updated="onFeedStateUpdated"
+        ></feeding-panel-component>
+
+        <!-- Breed panel — Parent A pre-filled with this creature -->
+        <breeding-panel-component
+          :username="username"
+          :initial-url-a="breedPrefilledUrl"
+          @notify="(msg,type) => notify(msg,type)"
+        ></breeding-panel-component>
+
+      </template>
+
+    </div>
+  `
+};
+
+
 
 const routes = [
-  { path: "/",        component: HomeView    },
-  { path: "/about",   component: AboutView   },
-  { path: "/@:user",  component: ProfileView },
+  { path: "/",                    component: HomeView    },
+  { path: "/about",               component: AboutView   },
+  { path: "/@:author/:permlink",  component: CreatureView },
+  { path: "/@:user",              component: ProfileView },
 ];
 
 const router = createRouter({
@@ -1079,6 +1264,7 @@ vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("FeedingPanelComponent",       FeedingPanelComponent);
+vueApp.component("CreatureView",                CreatureView);
 
 vueApp.use(router);
 vueApp.mount("#app");

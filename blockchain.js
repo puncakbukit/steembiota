@@ -5,6 +5,9 @@
 // No Vue, no DOM dependencies.
 // ============================================================
 
+// ---- SteemBiota app URL (used in post bodies to link back to creature pages) ----
+const APP_URL = "https://steembiota.github.io";
+
 // ---- RPC nodes & fallback ----
 
 const RPC_NODES = [
@@ -161,6 +164,8 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
   const permlink = buildPermlink(title);
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
 
+  const creaturePageUrl = `${APP_URL}/#/@${username}/${permlink}`;
+
   const body =
     `## ❇ ${creatureName}\n\n` +
     `**Sex:** ${sexLabel}  \n` +
@@ -173,7 +178,8 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
     `**Mutation:** MUT ${genome.MUT}  \n\n` +
     `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
     `\`\`\`genome\n${JSON.stringify(genome, null, 2)}\n\`\`\`\n\n` +
-    `*Published via [SteemBiota — Immutable Evolution]*`;
+    `---\n🔗 [View on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Published via [SteemBiota — Immutable Evolution](${APP_URL})*`;
 
   const jsonMetadata = {
     app: "steembiota/1.0",
@@ -208,6 +214,8 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
   const pAUrl = `https://steemit.com/@${pA.author}/${pA.permlink}`;
   const pBUrl = `https://steemit.com/@${pB.author}/${pB.permlink}`;
 
+  const creaturePageUrl = `${APP_URL}/#/@${username}/${permlink}`;
+
   const mutLine = breedInfo.speciated
     ? "⚡ **Speciation** — new genus emerged!"
     : breedInfo.mutated
@@ -228,7 +236,8 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
     `- Parent B: ${pBUrl}  \n\n` +
     `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
     `\`\`\`genome\n${JSON.stringify(genome, null, 2)}\n\`\`\`\n\n` +
-    `*Bred via [SteemBiota — Immutable Evolution]*`;
+    `---\n🔗 [View on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Bred via [SteemBiota — Immutable Evolution](${APP_URL})*`;
 
   const jsonMetadata = {
     app: "steembiota/1.0",
@@ -269,11 +278,14 @@ function publishFeed(username, creatureAuthor, creaturePermlink, creatureName, f
   const foodEmoji = { nectar: "🍯", fruit: "🍎", crystal: "💎" }[foodType] || "🍃";
   const foodLabel = { nectar: "Nectar", fruit: "Fruit", crystal: "Crystal" }[foodType] || foodType;
 
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+
   const body =
     `${foodEmoji} **Feeding Event** — ${foodLabel}\n\n` +
     `@${username} fed **${creatureName}** with ${foodLabel}.\n\n` +
     `\`\`\`\nSTEEMBIOTA_FEED\ncreature: @${creatureAuthor}/${creaturePermlink}\nfood: ${foodType}\nfeeder: ${username}\n\`\`\`\n\n` +
-    `*Recorded via [SteemBiota — Immutable Evolution]*`;
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
 
   const jsonMetadata = {
     app: "steembiota/1.0",
