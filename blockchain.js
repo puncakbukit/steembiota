@@ -6,7 +6,7 @@
 // ============================================================
 
 // ---- SteemBiota app URL (used in post bodies to link back to creature pages) ----
-const APP_URL = "https://steembiota.github.io";
+const APP_URL = "https://puncakbukit.github.io/steembiota";
 
 // ---- RPC nodes & fallback ----
 
@@ -167,7 +167,7 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
   const creaturePageUrl = `${APP_URL}/#/@${username}/${permlink}`;
 
   const body =
-    `## ❇ ${creatureName}\n\n` +
+    `## 🧬 ${creatureName}\n\n` +
     `**Sex:** ${sexLabel}  \n` +
     `**Age:** ${age} day${age === 1 ? "" : "s"}  \n` +
     `**Status:** ${lifecycleStage}  \n` +
@@ -435,11 +435,10 @@ function formatBirthTime(date) {
 }
 
 // Build the default post title for a creature.
-// type      : "Founder" | "Offspring"
 // birthDate : Date object (defaults to now)
-function buildDefaultTitle(creatureName, type, birthDate) {
+function buildDefaultTitle(creatureName, birthDate) {
   const born = formatBirthTime(birthDate instanceof Date ? birthDate : new Date());
-  return `${creatureName} (${type}) — ${born}`;
+  return `${creatureName} — ${born}`;
 }
 
 function steemDate(ts) {

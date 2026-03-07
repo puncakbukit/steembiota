@@ -673,7 +673,7 @@ const HomeView = {
       this.genome         = generateGenome();
       this.feedState      = null;
       this.unicodeArt     = buildUnicodeArt(this.genome, 0, null);
-      this.customTitle    = buildDefaultTitle(generateFullName(this.genome), "Founder", new Date(this.birthTimestamp));
+      this.customTitle    = buildDefaultTitle(generateFullName(this.genome), new Date(this.birthTimestamp));
     },
 
     async publishCreature() {
@@ -718,7 +718,7 @@ const HomeView = {
       <!-- Identity header -->
       <div v-if="creatureName" style="margin:16px 0 6px;">
         <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
-          ❇ {{ creatureName }}
+          🧬 {{ creatureName }}
         </div>
         <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
 
@@ -993,7 +993,7 @@ const CreatureView = {
         <!-- Identity header -->
         <div style="margin-bottom:12px;">
           <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
-            ❇ {{ name }}
+            🧬 {{ name }}
           </div>
           <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
 
