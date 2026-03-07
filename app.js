@@ -371,192 +371,221 @@ function computeFeedState(feedEvents, genome) {
 }
 
 // ============================================================
-// STEEMBIOTA UNICODE ART SYSTEM v2
-// Radial distance-field renderer — organic oval body shape.
-// Grid grows with lifecycle stage; all values are deterministic.
+// STEEMBIOTA UNICODE ART SYSTEM v3 — Side-profile silhouette
+//
+// Renders a side-facing quadruped matching the canvas renderer:
+//   ears · head+snout+eye · torso · tail · four legs+paws
+//   + optional mane, dorsal wing, ornament nodes, fertility sparkles
+//
+// All output is deterministic from the genome. Width grows with age.
 // ============================================================
 
-// ---- Glyph pools ----
-const UNI_BODY        = ["●","◉","◆","◍","▣","⬡"];        // MOR % 6
-const UNI_BODY_ELDER  = ["◇","○","◎","□","◌","▢"];        // MOR % 6  hollow/aged
-const UNI_FOSSIL_BODY = ["▒","░","▓","╬","╪","╫"];        // GEN % 6
-const UNI_FOSSIL_HEAD = ["☉","⊗","⊙","◎","⊛","⊜"];        // GEN % 6
-const UNI_SIGIL       = ["⟡","✶","❖","✦","◈","✧"];        // GEN % 6
-const UNI_ORN         = ["✦","✧","✶","✹","❈","✷"];        // ORN % 6
-const UNI_TAIL        = ["∿","≋","∾","~","⌇","⌀"];        // MOR % 6
-const UNI_APP_L       = ["◁","(","«","⟨","╱","<"];        // APP % 6
-const UNI_APP_R       = ["▷",")",">","⟩","╲","»"];        // APP % 6
-const UNI_SPARKLE     = "✦";
+// ---- Glyph palettes ----
+// Body fill — MOR % 6 selects a palette; [dense, mid, light] for top/mid/bottom rows
+const UNI_BODY_FILLS = [
+  ["▓","▒","░"],   // 0 dense shading
+  ["█","▉","▊"],   // 1 solid blocks
+  ["◆","◇","◈"],   // 2 diamond texture
+  ["●","◉","○"],   // 3 dot texture
+  ["▣","▤","▦"],   // 4 patterned blocks
+  ["◼","◻","▪"],   // 5 mixed density
+];
+const UNI_TAIL_CHARS  = ["≋","∿","≈","~","⌇","∾"];  // MOR % 6
+const UNI_ORN_CHARS   = ["✦","✧","✶","✹","❈","⬡"];  // ORN % 6
+const UNI_EYE_CHARS   = ["◉","◎","⊛","⊙"];           // GEN % 4
+const UNI_PAW_CHARS   = ["╨","┴","╩","∪"];           // APP % 4
+const UNI_EAR_STYLES  = [" /\\", " /^", " /V", " ^^"]; // APP % 4
+const UNI_SIGIL_CHARS = ["⟡","✶","❖","✦","◈","✧"];  // GEN % 6
+const UNI_FOSSIL_BODY = ["▒","░","▓","╬","╪","╫"];   // GEN % 6
+const UNI_FOSSIL_HEAD = ["☉","⊗","⊙","◎"];           // GEN % 4
 
-// ---- Grid size by lifecycle percentage ----
+// ---- Art width scales with lifecycle ----
 function unicodeGridSize(pct) {
-  if (pct < 0.05) return 6;
-  if (pct < 0.12) return 10;
-  if (pct < 0.25) return 14;
-  if (pct < 0.40) return 18;
-  if (pct < 0.60) return 22;
-  if (pct < 0.80) return 26;
+  if (pct < 0.05) return 14;
+  if (pct < 0.12) return 18;
+  if (pct < 0.25) return 24;
+  if (pct < 0.50) return 30;
+  if (pct < 0.80) return 36;
   if (pct < 1.00) return 30;
-  return 18; // fossil
+  return 24; // fossil
 }
 
 // ---- Main builder ----
-// genome    : genome object
-// age       : integer days (0 = newborn)
-// feedState : optional object from computeFeedState() — affects glyphs
 function buildUnicodeArt(genome, age, feedState) {
   const effectiveLIF = genome.LIF + (feedState ? feedState.lifespanBonus : 0);
-  const pct    = Math.min(age / effectiveLIF, 1.0);
+  const pct    = Math.min(age / Math.max(effectiveLIF, 1), 1.0);
   const fossil = pct >= 1.0;
-  const size   = unicodeGridSize(pct);
-  const cx     = size / 2;        // fractional centre x
-  const cy     = size / 2;        // fractional centre y
+  const W      = unicodeGridSize(pct);
 
-  // ---- Health / feed state ----
-  const healthSymbol = feedState ? feedState.symbol : "•";
-  const isWeak       = feedState && feedState.healthPct === 0;
-  const isThriving   = feedState && feedState.healthPct >= 0.80;
-
-  // Weak creatures use a dimmer body glyph pool — must be declared before bodyChar
-  const UNI_BODY_WEAK  = ["░","▒","·","∘","◌","○"];
-  const activeBodyPool = isWeak
-    ? UNI_BODY_WEAK
-    : (pct >= 0.80 ? UNI_BODY_ELDER : UNI_BODY);
+  // Genome fractional values for continuous variation
+  const morFrac = (genome.MOR % 1000) / 999;
+  const appFrac = (genome.APP % 1000) / 999;
+  const ornFrac = (genome.ORN % 1000) / 999;
 
   // ---- Glyph selection ----
-  const bodyChar = fossil
-    ? UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length]
-    : activeBodyPool[genome.MOR % activeBodyPool.length];
-  const sigil    = UNI_SIGIL [genome.GEN % UNI_SIGIL.length];
-  const ornChar  = UNI_ORN   [genome.ORN % UNI_ORN.length];
-  const tailChar = UNI_TAIL  [genome.MOR % UNI_TAIL.length];
-  const appL     = UNI_APP_L [genome.APP % UNI_APP_L.length];
-  const appR     = UNI_APP_R [genome.APP % UNI_APP_R.length];
-  const sex      = genome.SX === 0 ? "♂" : "♀";
-  const fertile  = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+  const fillPool  = UNI_BODY_FILLS[genome.MOR % UNI_BODY_FILLS.length];
+  const fillD     = fillPool[0];  // dense — main body interior
+  const fillM     = fillPool[1];  // mid   — body edge / shading
+  const fillL     = fillPool[2];  // light — belly / top outline row
+  const tailChar  = UNI_TAIL_CHARS[genome.MOR % UNI_TAIL_CHARS.length];
+  const ornChar   = UNI_ORN_CHARS [genome.ORN % UNI_ORN_CHARS.length];
+  const eyeChar   = UNI_EYE_CHARS [genome.GEN % UNI_EYE_CHARS.length];
+  const pawChar   = UNI_PAW_CHARS [genome.APP % UNI_PAW_CHARS.length];
+  const earStyle  = UNI_EAR_STYLES[genome.APP % UNI_EAR_STYLES.length];
+  const sigil     = UNI_SIGIL_CHARS[genome.GEN % UNI_SIGIL_CHARS.length];
+  const sex       = genome.SX === 0 ? "♂" : "♀";
+  const fertile   = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+  const hasMane   = (genome.ORN % 3) > 0;
+  const hasWing   = (genome.APP % 5) === 0;   // ~20% of creatures have a dorsal wing
 
-  // ---- Radii derived from genome + stage ----
-  // rx/ry: ellipse radii as fractions of size/2.
-  // MOR biases the shape; lifecycle narrows/widens it.
-  const morFrac = (genome.MOR % 1000) / 1000;   // 0.0–1.0
-  const baseRx  = 0.30 + morFrac * 0.18;        // 0.30–0.48 of size/2
-  const baseRy  = 0.38 + morFrac * 0.14;        // 0.38–0.52
-  // Stage modifiers: body shrinks slightly for elder/fossil
-  const stageScale = pct >= 0.80 ? 0.88 : 1.0;
-  const rx = baseRx * stageScale * (size / 2);
-  const ry = baseRy * stageScale * (size / 2);
+  // Proportions — all in character columns
+  const headW   = Math.max(4, Math.round(W * (0.16 + morFrac * 0.06)));
+  const bodyLen = Math.max(6, Math.round(W * (0.42 + morFrac * 0.14)));
+  const tailLen = Math.max(3, Math.round(W * (0.20 + appFrac * 0.14)));
 
-  // Appendage rows: APP determines how many side rows get flanking glyphs.
-  // Active from Child (pct>=0.12). Count scales with grid.
-  const appCount = pct >= 0.12
-    ? Math.max(1, 2 + Math.floor((genome.APP % 4) * pct))
-    : 0;
+  // Layout: creature faces left, tail extends right
+  // columns: [1 margin][headW head][bodyLen body][tailLen tail][orb nodes]
+  const margin    = 1;
+  const headStart = margin;
+  const bodyStart = headStart + headW;
+  const tailStart = bodyStart + bodyLen;
 
-  // ---- Build grid row by row ----
-  const rows = [];
-  for (let y = 0; y < size; y++) {
-    let row = "";
-    for (let x = 0; x < size; x++) {
-      // Ellipse membership test using pixel centres (+0.5)
-      const dx = (x + 0.5) - cx;
-      const dy = (y + 0.5) - cy;
-      const inside = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0;
-      if (inside) {
-        row += bodyChar;
-      } else {
-        row += " ";
-      }
-    }
-    rows.push(row);
-  }
+  // Anatomy counts
+  const bodyRows = pct < 0.05 ? 2 : pct < 0.12 ? 3 : pct < 0.4 ? 4 : 5;
+  const legH     = pct >= 0.12 ? 2 : 0;  // 0 = newborn has no legs yet
+  const showEars = pct >= 0.08;
 
-  // ---- FOSSIL: replace body with fossil chars + crack overlay ----
+  // ---- String helpers ----
+  const sp   = n => " ".repeat(Math.max(0, n));
+  const rep  = (c, n) => { let s = ""; for (let i = 0; i < n; i++) s += c; return s; };
+  const pad  = (s, n) => s.length >= n ? s.slice(0, n) : s + sp(n - s.length);
+
+  const lines = [];
+
+  // ---- FOSSIL ----
   if (fossil) {
-    // Already using fossil bodyChar; just add bracket frame on first/last body rows
-    const firstBody = rows.findIndex(r => r.trim().length > 0);
-    const lastBody  = rows.length - 1 - [...rows].reverse().findIndex(r => r.trim().length > 0);
+    const fc = UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length];
     const fh = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
-    // Insert head above first body row
-    if (firstBody > 0) {
-      rows[firstBody - 1] = " ".repeat(Math.floor(size / 2)) + fh;
-    }
-    const result = rows.join("\n");
-    return result;
+    lines.push(sp(headStart) + fh);
+    for (let r = 0; r < 3; r++) lines.push(sp(headStart) + rep(fc, headW + bodyLen));
+    lines.push("");
+    lines.push(" 🦴 Fossil — genome preserved on-chain");
+    return lines.join("\n");
   }
 
-  // ---- APPENDAGES: inject limb chars on side cells of select rows ----
-  if (appCount > 0) {
-    // Find body rows (non-empty) and pick evenly spaced ones for appendages
-    const bodyRowIdxs = rows
-      .map((r, i) => ({ i, filled: r.trim().length }))
-      .filter(r => r.filled > 0)
-      .map(r => r.i);
-    // Space appendage rows evenly across body, skipping first and last
-    const inner = bodyRowIdxs.slice(1, -1);
-    const step  = Math.max(1, Math.floor(inner.length / appCount));
-    for (let a = 0; a < appCount && a * step < inner.length; a++) {
-      const ri = inner[a * step];
-      const row = rows[ri];
-      // Find leftmost and rightmost body char positions
-      const left  = row.indexOf(bodyChar);
-      const right = row.lastIndexOf(bodyChar);
-      if (left > 0 && right < size - 1) {
-        rows[ri] =
-          row.slice(0, left - 1) + appL +
-          row.slice(left, right + 1) +
-          appR + row.slice(right + 2);
+  // ---- EARS row ----
+  if (showEars) {
+    let earRow = sp(headStart) + earStyle;
+    // Mane wisps along the back (above body) for applicable genomes
+    if (hasMane && pct >= 0.25) {
+      const maneLen = Math.round(bodyLen * 0.45);
+      earRow = pad(earRow, bodyStart) + rep("'", maneLen);
+    }
+    lines.push(earRow);
+  }
+
+  // ---- DORSAL WING row (above top body row) ----
+  if (hasWing && pct >= 0.4) {
+    const wLen = Math.round(bodyLen * 0.35);
+    const wOff = bodyStart + Math.round(bodyLen * 0.28);
+    lines.push(sp(wOff) + rep("^", wLen));
+  }
+
+  // ---- BODY rows ----
+  // The head spans the vertically centred rows; top+bottom rows are outline only.
+  const headRows = Math.max(1, bodyRows - 2);
+  const headTop  = Math.floor((bodyRows - headRows) / 2);
+  // Orb column: varies by ORN so each creature has a unique pattern accent position
+  const ornCol   = Math.round(bodyLen * (0.30 + ornFrac * 0.42));
+
+  for (let r = 0; r < bodyRows; r++) {
+    const isTop    = r === 0;
+    const isBottom = r === bodyRows - 1;
+    const isMid    = r === Math.floor(bodyRows / 2);
+    const hasHead  = r >= headTop && r < headTop + headRows;
+
+    // Row fill density: top/bottom are lighter outline chars; middle is dense
+    const rowD = isTop || isBottom ? fillM : fillD;
+    const rowL = isTop ? fillL : isBottom ? fillL : fillM;
+
+    let line = sp(margin);
+
+    // Head column
+    if (hasHead) {
+      const isEyeRow = (r === headTop + Math.floor(headRows / 2));
+      if (isEyeRow) {
+        // snout dot + eye + body-fill + closing bracket to suggest muzzle
+        line += pad("." + eyeChar + rep(rowD, Math.max(0, headW - 3)) + ")", headW);
+      } else {
+        line += rep(rowL, headW);
+      }
+    } else {
+      line += sp(headW);
+    }
+
+    // Body column
+    let bodySeg = "";
+    for (let c = 0; c < bodyLen; c++) {
+      const isEdge = (c === 0 || c === bodyLen - 1);
+      // Ornament node: placed at ornCol on the middle row only (adult+)
+      if (isMid && pct >= 0.40 && c === ornCol) {
+        bodySeg += ornChar;
+      } else {
+        bodySeg += isEdge ? rowL : rowD;
       }
     }
+    line += bodySeg;
+
+    // Tail column — tapers from wide (mid) to narrow (top/bottom)
+    if (isMid) {
+      line += rep(tailChar, tailLen);
+      // Ornament orbs float after the tail tip on mid-row (adult+)
+      if (pct >= 0.40) {
+        const orbCount = 1 + Math.floor(ornFrac * 3);  // 1–4 orbs
+        for (let o = 0; o < orbCount; o++) line += " " + ornChar;
+      }
+    } else {
+      // Taper: rows above/below mid get progressively shorter tail
+      const distFromMid = Math.abs(r - Math.floor(bodyRows / 2));
+      const taper       = 1 - (distFromMid / Math.ceil(bodyRows / 2)) * 0.65;
+      const tLen        = Math.round(tailLen * taper);
+      line += sp(tailLen - tLen) + rep(tailChar, tLen);
+      // Single sparkle on top tail edge when fertile or thriving
+      if (isTop && pct >= 0.40 && (fertile || (feedState && feedState.healthPct >= 0.55))) {
+        line += " " + ornChar;
+      }
+    }
+
+    lines.push(line);
   }
 
-  // ---- HEADER: sigil + sex (+ ornament if Teen+, sparkles if fertile, health if fed) ----
-  const headerLines = [];
-  if (pct >= 0.25) {
-    const ornRow = fertile
-      ? UNI_SPARKLE + " " + sigil + sex + " " + UNI_SPARKLE
-      : isThriving
-        ? healthSymbol + " " + ornChar + " " + healthSymbol
-        : ornChar;
-    headerLines.push(ornRow);
-  }
-  // Prepend health symbol to sigil line when creature has any feed state
-  const sigilLine = feedState && feedState.healthPct > 0
-    ? healthSymbol + sigil + sex
-    : sigil + sex;
-  headerLines.push(sigilLine);
-
-  // ---- TAIL: append below last body row (Child+) ----
-  // Find last row with body content and place tail just after
-  const lastBodyRow = rows.length - 1 - [...rows].reverse().findIndex(r => r.trim().length > 0);
-  if (pct >= 0.12 && lastBodyRow < rows.length - 1) {
-    rows[lastBodyRow + 1] = " ".repeat(Math.floor(size / 2)) + tailChar;
-  } else if (pct >= 0.12) {
-    rows.push(" ".repeat(Math.floor(size / 2)) + tailChar);
+  // ---- LEGS ----
+  if (legH > 0) {
+    // Four legs: two under head zone (front) + two under body (back)
+    const legCols = [
+      headStart + Math.round(headW * 0.30),
+      headStart + Math.round(headW * 0.82),
+      bodyStart + Math.round(bodyLen * 0.26),
+      bodyStart + Math.round(bodyLen * 0.72),
+    ];
+    const rowWidth = tailStart + tailLen + 4;
+    for (let lr = 0; lr < legH; lr++) {
+      const chars = Array(rowWidth).fill(" ");
+      for (const col of legCols) {
+        if (col < chars.length)
+          chars[col] = (lr === legH - 1) ? pawChar : "|";
+      }
+      lines.push(chars.join("").trimEnd());
+    }
   }
 
-  // ---- Trim blank rows from top and bottom of body grid ----
-  while (rows.length > 0 && rows[0].trim() === "") rows.shift();
-  while (rows.length > 0 && rows[rows.length - 1].trim() === "") rows.pop();
+  // ---- HEADER line (sigil · sex · health · fertile sparkles) ----
+  const healthSym = feedState && feedState.healthPct > 0 ? feedState.symbol + " " : "";
+  const header    = fertile
+    ? "✦ " + sigil + sex + " ✦"
+    : healthSym + sigil + sex;
 
-  // ---- Centre helper ----
-  function centre(str, width) {
-    const pad = Math.max(0, Math.floor((width - str.length) / 2));
-    return " ".repeat(pad) + str;
-  }
-
-  // ---- Combine header + body rows ----
-  // Total target = size lines exactly.
-  // headerLines sit first; remaining lines come from body rows.
-  // If body rows + header < size, pad with empty lines at bottom.
-  // If body rows + header > size, trim from bottom (shouldn't happen normally).
-  const combined = [
-    ...headerLines.map(h => centre(h, size)),
-    ...rows
-  ];
-  while (combined.length < size) combined.push("");
-  while (combined.length > size) combined.pop();
-
-  return combined.join("\n");
+  return header + "\n" + lines.join("\n");
 }
 // ============================================================
 // ROUTE VIEWS
