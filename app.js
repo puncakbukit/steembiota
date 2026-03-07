@@ -188,32 +188,89 @@ function breedGenomes(a, b) {
 }
 
 // ============================================================
-// STEEMBIOTA NAMING SYSTEM (deterministic from genome)
+// STEEMBIOTA NAMING SYSTEM v2
+// Both genus and species are built from the same 64-syllable pool.
+//
+// Genus   — 2–3 syllables, derived from GEN only.
+//           Same GEN always produces the same genus → related creatures
+//           share a recognisable genus sound.
+//
+// Species — 2–5 syllables, derived from MOR + APP + ORN + CLR.
+//           Each morphology gene contributes independently so small
+//           genome changes produce subtly different species names.
+//
+// All selection is done with modular arithmetic on the genome values,
+// keeping the system 100% deterministic and requiring no dictionaries.
 // ============================================================
 
-const syllablesA = ["Lu", "Te", "Mo", "Va", "Zi", "Ra", "Ko", "Ny"];
-const syllablesB = ["mo", "ra", "vi", "to", "na", "shi", "ka", "re"];
-const syllablesC = ["ra", "nus", "tor", "lex", "via", "ron", "dus", "x"];
+// 64-syllable pool — curated for Latin/biological feel and pronounceability.
+// Indexed 0–63; % 64 maps any integer cleanly onto the pool.
+const SYLLABLE_POOL = [
+  "ba","be","bi","bo","bu",
+  "ca","ce","ci","co","cu",
+  "da","de","di","do","du",
+  "fa","fe","fi","fo","fu",
+  "ga","ge","gi","go","gu",
+  "ka","ke","ki","ko","ku",
+  "la","le","li","lo","lu",
+  "ma","me","mi","mo","mu",
+  "na","ne","ni","no","nu",
+  "ra","re","ri","ro","ru",
+  "sa","se","si","so","su",
+  "ta","te","ti","to","tu",
+  "va","ve","vi","vo","vu"
+  // 65 entries — trim last to keep exactly 64
+].slice(0, 64);
 
-const speciesA = ["Shavi", "Virel", "Morun", "Zerin", "Talin", "Korin", "Velis", "Nora"];
-const speciesB = ["Oua", "Tel", "Ka", "Pol", "Zen", "Ira", "Lux", "Tor"];
+// Distinct primes used as per-position multipliers to avoid aliasing
+// when different syllable slots draw from the same seed value.
+// All values kept small enough for safe Math.imul 32-bit arithmetic.
+const SYLLABLE_PRIMES = [1, 31, 127, 1009, 3571];
 
+// Pick a syllable at position i from a numeric seed.
+function pickSyllable(seed, i) {
+  // Multiply by a distinct prime per position, then fold into [0, 64).
+  // The double-modulo ((x % 64) + 64) % 64 guards against negative results
+  // from 32-bit signed overflow in Math.imul.
+  const raw = Math.imul((seed | 0) + 1, SYLLABLE_PRIMES[i]);
+  return SYLLABLE_POOL[((raw % 64) + 64) % 64];
+}
+
+// Generate the genus name from GEN alone.
+// Length: 2 + (GEN % 2) → 2 or 3 syllables.
+// First letter capitalised; rest lowercase.
 function generateGenusName(GEN) {
-  const a = syllablesA[GEN % syllablesA.length];
-  const b = syllablesB[Math.floor(GEN / 3) % syllablesB.length];
-  const c = syllablesC[Math.floor(GEN / 7) % syllablesC.length];
-  return a + b + c;
+  const length = 2 + (GEN % 2);                 // 2 or 3
+  let name = "";
+  for (let i = 0; i < length; i++) {
+    // Each position uses a different prime to spread selections across
+    // the full 64-entry pool rather than clustering near the start.
+    const raw = Math.imul((GEN | 0) + 1 + i * 7919, SYLLABLE_PRIMES[i]);
+    name += SYLLABLE_POOL[((raw % 64) + 64) % 64];
+  }
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-function generateSpeciesName(MOR, ORN) {
-  const partA = speciesA[MOR % speciesA.length];
-  const partB = speciesB[ORN % speciesB.length];
-  return partA + " " + partB;
+// Generate the species name from MOR, APP, ORN, CLR.
+// Length: 2 + (MOR % 4) → 2–5 syllables. All lowercase.
+function generateSpeciesName(MOR, APP, ORN, CLR) {
+  const length = 2 + (MOR % 4);                 // 2–5
+  // Mix the four genes into a single seed with distinct prime multipliers
+  // to ensure each gene has independent influence on the result.
+  const seed = (Math.imul(MOR, 7331) ^ Math.imul(APP, 104729) ^
+                Math.imul(ORN, 15013) ^ Math.imul(CLR, 49891)) >>> 0;
+  let name = "";
+  for (let i = 0; i < length; i++) {
+    const raw = Math.imul((seed | 0) + 1 + i * 6271, SYLLABLE_PRIMES[i]);
+    name += SYLLABLE_POOL[((raw % 64) + 64) % 64];
+  }
+  return name;   // all lowercase — mirrors biological taxonomy
 }
 
+// Public API — unchanged; called by HomeView and BreedingPanelComponent.
 function generateFullName(genome) {
   const genus   = generateGenusName(genome.GEN);
-  const species = generateSpeciesName(genome.MOR, genome.ORN);
+  const species = generateSpeciesName(genome.MOR, genome.APP, genome.ORN, genome.CLR);
   return genus + " " + species;
 }
 
