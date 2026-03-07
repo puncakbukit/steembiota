@@ -384,13 +384,13 @@ function formatBirthTime(date) {
   const MONTHS = ["January","February","March","April","May","June",
                   "July","August","September","October","November","December"];
 
-  const hour    = date.getHours();
-  const weekday = DAYS[date.getDay()];
-  const month   = MONTHS[date.getMonth()];
-  const day     = date.getDate();
-  const year    = date.getFullYear();
+  const hour    = date.getUTCHours();
+  const weekday = DAYS[date.getUTCDay()];
+  const month   = MONTHS[date.getUTCMonth()];
+  const day     = date.getUTCDate();
+  const year    = date.getUTCFullYear();
 
-  // Convert 0–23 hour to a natural English time-of-day phrase
+  // Convert 0–23 UTC hour to a natural English time-of-day phrase
   const HOUR_PHRASES = [
     "midnight",             // 0
     "1 in the morning",     // 1
@@ -419,7 +419,7 @@ function formatBirthTime(date) {
   ];
 
   const timePhrase = HOUR_PHRASES[hour];
-  return `born at ${timePhrase} on ${weekday}, ${month} ${day}, ${year}`;
+  return `born at ${timePhrase} UTC on ${weekday}, ${month} ${day}, ${year}`;
 }
 
 // Build the default post title for a creature.
