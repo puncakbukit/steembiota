@@ -1251,7 +1251,7 @@ const BreedingPanelComponent = {
         this.childGenome = child;
         this.childName   = generateFullName(child);
         this.childArt    = buildUnicodeArt(child, 0);
-        this.customTitle = buildDefaultTitle(this.childName, "Offspring", new Date());
+        this.customTitle = buildDefaultTitle(this.childName, new Date());
         this.breedInfo   = { mutated, speciated,
           parentA: { author: resA.author, permlink: resA.permlink },
           parentB: { author: resB.author, permlink: resB.permlink }
@@ -1358,7 +1358,7 @@ const BreedingPanelComponent = {
       <!-- Child preview -->
       <div v-if="childGenome" style="margin-top:20px;">
         <div style="font-size:1.1rem;font-weight:bold;color:#80deea;">
-          ❇ {{ childName }}
+          🧬 {{ childName }}
         </div>
         <div style="font-size:0.85rem;color:#888;margin:2px 0 6px;">
           {{ sexLabel }}
