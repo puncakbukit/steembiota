@@ -157,9 +157,8 @@ function keychainLogin(username, callback) {
 // age             : number — days since creation (calculateAge)
 // lifecycleStage  : string — "Juvenile" | "Fertile Adult" | "Elder" | "Fossil"
 // callback        : (response) => { response.success, response.message }
-function publishCreature(username, genome, unicodeArt, creatureName, age, lifecycleStage, callback) {
+function publishCreature(username, genome, unicodeArt, creatureName, age, lifecycleStage, title, callback) {
   const permlink = buildPermlink("steembiota-" + creatureName.toLowerCase());
-  const title    = `❇ ${creatureName} (Founder)`;
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
 
   const body =
@@ -201,9 +200,8 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
 // ---- SteemBiota — publish a bred offspring to the blockchain ----
 //
 // breedInfo: { mutated, speciated, parentA: {author,permlink}, parentB: {author,permlink} }
-function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo, callback) {
+function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo, title, callback) {
   const permlink = buildPermlink("steembiota-offspring-" + creatureName.toLowerCase());
-  const title    = `🧬 ${creatureName} (Offspring)`;
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
   const pA = breedInfo.parentA;
   const pB = breedInfo.parentB;

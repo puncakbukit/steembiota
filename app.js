@@ -580,7 +580,8 @@ const HomeView = {
       publishing:     false,
       birthTimestamp: null,
       now:            new Date(),
-      feedState:      null    // computed from parseFeedEvents + computeFeedState
+      feedState:      null,    // computed from parseFeedEvents + computeFeedState
+      customTitle:    ""       // pre-filled with default; user may edit before publishing
     };
   },
   created() {
@@ -643,6 +644,7 @@ const HomeView = {
       this.genome         = generateGenome();
       this.feedState      = null;
       this.unicodeArt     = buildUnicodeArt(this.genome, 0, null);
+      this.customTitle    = `❇ ${generateFullName(this.genome)} (Founder)`;
     },
 
     async publishCreature() {
@@ -664,7 +666,7 @@ const HomeView = {
       }
 
       this.publishing = true;
-      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, (response) => {
+      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, this.customTitle, (response) => {
         this.publishing = false;
         if (response.success) {
           this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
@@ -743,6 +745,17 @@ const HomeView = {
           <!-- Unicode art -->
           <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
           <pre :style="fossil ? { color: '#444', opacity: '0.6' } : {}">{{ unicodeArt }}</pre>
+
+          <!-- Post title — pre-filled, user-editable -->
+          <div style="margin-top:16px;max-width:520px;margin-left:auto;margin-right:auto;">
+            <label style="display:block;font-size:12px;color:#888;margin-bottom:4px;">Post title</label>
+            <input
+              v-model="customTitle"
+              type="text"
+              maxlength="255"
+              style="width:100%;font-size:13px;"
+            />
+          </div>
 
           <!-- Publish button -->
           <br/>

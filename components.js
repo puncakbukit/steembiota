@@ -929,13 +929,14 @@ const BreedingPanelComponent = {
       urlB:        "",
       loading:     false,
       loadError:   "",
-      genomeA:     null,   // loaded parent genome (for sex display)
+      genomeA:     null,
       genomeB:     null,
       childGenome: null,
       childName:   null,
       childArt:    null,
       breedInfo:   null,
       publishing:  false,
+      customTitle: ""       // pre-filled with default; user may edit before publishing
     };
   },
   computed: {
@@ -998,6 +999,7 @@ const BreedingPanelComponent = {
         this.childGenome = child;
         this.childName   = generateFullName(child);
         this.childArt    = buildUnicodeArt(child, 0);
+        this.customTitle = `🧬 ${this.childName} (Offspring)`;
         this.breedInfo   = { mutated, speciated,
           parentA: { author: resA.author, permlink: resA.permlink },
           parentB: { author: resB.author, permlink: resB.permlink }
@@ -1023,20 +1025,21 @@ const BreedingPanelComponent = {
         this.childGenome,
         this.childArt,
         this.childName,
-        0,
-        "Baby",
-        this.breedInfo.parentA,
-        this.breedInfo.parentB,
+        this.breedInfo,
+        this.customTitle,
         (response) => {
           this.publishing = false;
           if (response.success) {
             this.$emit("notify", "🧬 " + this.childName + " published to the blockchain!", "success");
             // Reset form
-            this.urlA = "";
-            this.urlB = "";
+            this.urlA        = "";
+            this.urlB        = "";
+            this.genomeA     = null;
+            this.genomeB     = null;
             this.childGenome = null;
-            this.childArt = null;
-            this.breedInfo = null;
+            this.childArt    = null;
+            this.breedInfo   = null;
+            this.customTitle = "";
           } else {
             this.$emit("notify", "Publish failed: " + (response.message || "Unknown error"), "error");
           }
@@ -1124,10 +1127,21 @@ const BreedingPanelComponent = {
           &nbsp;·&nbsp; LIF {{ childGenome.LIF }} days
         </div>
 
+        <!-- Post title — pre-filled, user-editable -->
+        <div style="margin-top:12px;max-width:520px;margin-left:auto;margin-right:auto;">
+          <label style="display:block;font-size:12px;color:#888;margin-bottom:4px;">Post title</label>
+          <input
+            v-model="customTitle"
+            type="text"
+            maxlength="255"
+            style="width:100%;font-size:13px;"
+          />
+        </div>
+
         <button
           @click="publishChild"
           :disabled="publishing || !username"
-          style="background:#1565c0;"
+          style="background:#1565c0;margin-top:10px;"
         >
           {{ publishing ? "Publishing…" : "📡 Publish Offspring to Steem" }}
         </button>
