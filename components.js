@@ -180,6 +180,11 @@ const CreatureCanvasComponent = {
     fossil:    { type: Boolean, default: false },
     feedState: { type: Object,  default: null  }
   },
+  data() {
+    // Direction is chosen once at component creation — purely random,
+    // not derived from the genome so it varies each time the page loads.
+    return { facingRight: Math.random() < 0.5 };
+  },
   watch: {
     genome()    { this.$nextTick(() => this.draw()); },
     age()       { this.$nextTick(() => this.draw()); },
@@ -304,6 +309,13 @@ const CreatureCanvasComponent = {
       const ctx = canvas.getContext("2d");
       const W = canvas.width, H = canvas.height;
       ctx.clearRect(0, 0, W, H);
+
+      // Mirror the entire canvas when facing right — no drawing code changes needed.
+      if (this.facingRight) {
+        ctx.save();
+        ctx.translate(W, 0);
+        ctx.scale(-1, 1);
+      }
 
       const g = this.genome;
       const p = this.buildPhenotype(g, this.age, this.feedState);
@@ -609,6 +621,9 @@ const CreatureCanvasComponent = {
         ctx.beginPath(); ctx.arc(ox, oy, p.bodyLen * sc * 1.6, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
       }
+
+      // Restore mirror transform if applied.
+      if (this.facingRight) ctx.restore();
     },
 
     // ----------------------------------------------------------
