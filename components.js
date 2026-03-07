@@ -205,358 +205,589 @@ const CreatureCanvasComponent = {
 
     // ----------------------------------------------------------
     // Derive phenotype from genome + age.
-    // All values are in [0,1] normalised space before drawing.
     // ----------------------------------------------------------
     buildPhenotype(genome, age, feedState) {
       const lifespanBonus = feedState ? feedState.lifespanBonus : 0;
       const effectiveLIF  = genome.LIF + lifespanBonus;
-      const pct   = Math.min(age / effectiveLIF, 1.0); // 0–1 lifespan progress
+      const pct    = Math.min(age / effectiveLIF, 1.0);
       const fossil = pct >= 1.0;
 
-      // ---- Lifecycle growth/decay scalars ----
-      // appendageScale and ornamentScale grow through youth, decay in old age.
-      let appendageScale, ornamentScale, patternOpacity, colorSat, colorLight;
+      // Lifecycle scalars
+      let bodyScale, ornamentScale, patternOpacity;
+      if      (pct < 0.05) { bodyScale = 0.45; ornamentScale = 0.00; patternOpacity = 0.10; }
+      else if (pct < 0.12) { bodyScale = 0.60; ornamentScale = 0.15; patternOpacity = 0.30; }
+      else if (pct < 0.25) { bodyScale = 0.78; ornamentScale = 0.40; patternOpacity = 0.60; }
+      else if (pct < 0.40) { bodyScale = 0.90; ornamentScale = 0.75; patternOpacity = 0.90; }
+      else if (pct < 0.60) { bodyScale = 1.00; ornamentScale = 1.00; patternOpacity = 1.00; }
+      else if (pct < 0.80) { bodyScale = 0.98; ornamentScale = 0.88; patternOpacity = 0.90; }
+      else if (pct < 1.00) { bodyScale = 0.92; ornamentScale = 0.70; patternOpacity = 0.75; }
+      else                 { bodyScale = 0.75; ornamentScale = 0.00; patternOpacity = 0.00; }
 
-      if      (pct < 0.05) { appendageScale = 0.15; ornamentScale = 0.00; patternOpacity = 0.10; }
-      else if (pct < 0.12) { appendageScale = 0.35; ornamentScale = 0.10; patternOpacity = 0.30; }
-      else if (pct < 0.25) { appendageScale = 0.60; ornamentScale = 0.30; patternOpacity = 0.60; }
-      else if (pct < 0.40) { appendageScale = 0.85; ornamentScale = 0.70; patternOpacity = 0.90; }
-      else if (pct < 0.60) { appendageScale = 1.00; ornamentScale = 1.00; patternOpacity = 1.00; }
-      else if (pct < 0.80) { appendageScale = 0.97; ornamentScale = 0.90; patternOpacity = 0.95; }
-      else if (pct < 1.00) { appendageScale = 0.90; ornamentScale = 0.80; patternOpacity = 0.85; }
-      else                 { appendageScale = 0.70; ornamentScale = 0.00; patternOpacity = 0.00; }
-
-      // ---- Fertility window glow ----
       const fertile = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+      const male    = genome.SX === 0;
 
-      // ---- GEN → color palette family (8 palettes cycling on GEN % 8) ----
+      // Colour
       const palettes = [
-        { base: 160 }, // teal/emerald
-        { base: 200 }, // cyan/sky
-        { base: 280 }, // violet/purple
-        { base:  30 }, // amber/gold
-        { base: 340 }, // rose/crimson
-        { base: 100 }, // lime/olive
-        { base: 240 }, // blue/indigo
-        { base:  55 }, // yellow/ochre
+        { base: 160 }, { base: 200 }, { base: 280 }, { base:  30 },
+        { base: 340 }, { base: 100 }, { base: 240 }, { base:  55 },
       ];
       const paletteBase = palettes[genome.GEN % 8].base;
       const finalHue    = (paletteBase + genome.CLR) % 360;
+      const healthPct   = feedState ? feedState.healthPct : 0.5;
+      const satBoost    = fossil ? 0 : Math.round((healthPct - 0.5) * 30);
+      const litBoost    = fossil ? 0 : Math.round((healthPct - 0.5) * 16);
+      const colorSat    = fossil ? 8  : Math.max(10, Math.min(100, 55 + ornamentScale * 20 + (fertile ? 10 : 0) + satBoost));
+      const colorLight  = fossil ? 28 : Math.max(15, Math.min(70,  40 + (pct < 0.6 ? 10 : 0) + litBoost));
 
-      // Saturation: full at peak, fades with age; +10% during fertility
-      // feedState modulates: thriving = +15 sat/+8 light, hungry = -20 sat/-5 light
-      const healthPct = feedState ? feedState.healthPct : 0.5; // neutral when unknown
-      const satBoost  = fossil ? 0 : Math.round((healthPct - 0.5) * 30); // -15 to +15
-      const litBoost  = fossil ? 0 : Math.round((healthPct - 0.5) * 16); // -8 to +8
-      colorSat   = fossil ? 8
-                 : Math.max(10, Math.min(100, 55 + (ornamentScale * 20) + (fertile ? 10 : 0) + satBoost));
-      colorLight = fossil ? 28
-                 : Math.max(15, Math.min(70, 40 + (pct < 0.6 ? 10 : 0) + litBoost));
+      // MOR → body proportions
+      const morRng      = this.makePrng(genome.MOR);
+      const bodyLen     = 80 + morRng() * 30;   // torso half-width
+      const bodyH       = 42 + morRng() * 18;   // torso half-height
+      const headSize    = 26 + morRng() * 12;   // head radius
+      const tailCurve   = 0.4 + morRng() * 0.5; // tail curl amount
 
-      // ---- SX → sexual dimorphism ----
-      const male          = genome.SX === 0;
-      const bodyScale     = male ? 1.00 : 1.10;
-      const ornScaleSex   = male ? 1.20 : 0.90;
+      // APP → appendage style
+      const appRng      = this.makePrng(genome.APP);
+      const legLen      = 44 + appRng() * 20;
+      const legThick    = 7  + appRng() * 5;
+      const earH        = 22 + appRng() * 14;
+      const earW        = 10 + appRng() * 6;
+      const hasWings    = appRng() > 0.72;      // rare dorsal wing/fin
+      const wingSpan    = 24 + appRng() * 20;
 
-      // ---- MOR → body shape (seeded) ----
-      const morRng    = this.makePrng(genome.MOR);
-      const bodyRx    = 50 + morRng() * 30;   // x-radius  50–80
-      const bodyRy    = 65 + morRng() * 25;   // y-radius  65–90
-      const headRatio = 0.25 + morRng() * 0.2; // 0.25–0.45
-      const hasTail   = morRng() > 0.4;
-      const tailLen   = 20 + morRng() * 40;
-
-      // ---- APP → appendages (seeded) ----
-      const appRng    = this.makePrng(genome.APP);
-      const limbCount = 2 + Math.floor(appRng() * 3);   // 2–4
-      const hasHorns  = appRng() > 0.45;
-      const hornLen   = 10 + appRng() * 20;
-      const hasFins   = appRng() > 0.60;
-      const finSize   = 8 + appRng() * 18;
-
-      // ---- ORN → ornaments (seeded) ----
-      const ornRng     = this.makePrng(genome.ORN);
-      const spikeCount = Math.floor(ornRng() * 7);       // 0–6
-      const glowNodes  = Math.floor(ornRng() * 4);       // 0–3
-      const hasFrills  = ornRng() > 0.55;
-      const frillSize  = 6 + ornRng() * 14;
-      const patternType = Math.floor(ornRng() * 3);      // 0=none 1=spots 2=stripes
+      // ORN → ornament style
+      const ornRng      = this.makePrng(genome.ORN);
+      const glowOrbs    = 2 + Math.floor(ornRng() * 4);  // 2–5 orbs on tail
+      const ribbons     = 1 + Math.floor(ornRng() * 3);  // 1–3 energy ribbons
+      const patternType = Math.floor(ornRng() * 3);      // 0=plain 1=spots 2=dapple
+      const orbHue      = (finalHue + 40 + ornRng() * 60) % 360;
+      const hasChestMark = ornRng() > 0.4;
+      const hasMane      = ornRng() > 0.45;
 
       return {
-        fossil, pct,
-        // color
-        finalHue, colorSat, colorLight, fertile,
-        // body
-        bodyRx: bodyRx * bodyScale, bodyRy: bodyRy * bodyScale,
-        headRatio, hasTail, tailLen,
-        // appendages
-        limbCount, hasHorns, hornLen, hasFins, finSize,
-        appendageScale: appendageScale * (male ? 1.0 : 0.9),
-        // ornaments
-        spikeCount, glowNodes, hasFrills, frillSize, patternType,
-        ornamentScale: ornamentScale * ornScaleSex,
-        patternOpacity,
-        // eye size — large on babies, normal otherwise
-        eyeRadius: pct < 0.05 ? 11 : pct < 0.12 ? 9 : 7,
+        fossil, pct, fertile, male,
+        bodyScale, ornamentScale, patternOpacity,
+        finalHue, colorSat, colorLight, orbHue,
+        bodyLen, bodyH, headSize, tailCurve,
+        legLen, legThick, earH, earW,
+        hasWings, wingSpan,
+        glowOrbs, ribbons, patternType, hasChestMark, hasMane,
+        eyeRadius: pct < 0.08 ? 9 : 7,
       };
     },
 
     // ----------------------------------------------------------
-    // Main draw routine
+    // Helpers
+    // ----------------------------------------------------------
+    hsl(h, s, l, a = 1) {
+      return a < 1
+        ? `hsla(${h},${s}%,${l}%,${a})`
+        : `hsl(${h},${s}%,${l}%)`;
+    },
+    radGrad(ctx, x, y, r0, r1, stops) {
+      const g = ctx.createRadialGradient(x, y, r0, x, y, r1);
+      stops.forEach(([t, c]) => g.addColorStop(t, c));
+      return g;
+    },
+    linGrad(ctx, x0, y0, x1, y1, stops) {
+      const g = ctx.createLinearGradient(x0, y0, x1, y1);
+      stops.forEach(([t, c]) => g.addColorStop(t, c));
+      return g;
+    },
+
+    // ----------------------------------------------------------
+    // Main draw
     // ----------------------------------------------------------
     draw() {
       const canvas = this.$refs.canvas;
       if (!canvas || !this.genome) return;
-      const ctx  = canvas.getContext("2d");
-      const W    = canvas.width;
-      const H    = canvas.height;
-      const cx   = W / 2;
-      const cy   = H / 2;
-
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width, H = canvas.height;
       ctx.clearRect(0, 0, W, H);
 
       const g = this.genome;
       const p = this.buildPhenotype(g, this.age, this.feedState);
+      const sc = p.bodyScale;
 
-      const fill   = `hsl(${p.finalHue}, ${p.colorSat}%, ${p.colorLight}%)`;
-      const stroke = `hsl(${p.finalHue}, ${p.colorSat}%, ${Math.max(p.colorLight - 18, 8)}%)`;
-      const dim    = `hsl(${p.finalHue}, ${Math.max(p.colorSat - 20, 5)}%, ${Math.max(p.colorLight - 10, 8)}%)`;
+      // Creature is drawn in side-profile facing left.
+      // Pivot point: centre of torso.
+      const ox = W * 0.46;   // torso centre x (shifted left so tail fits)
+      const oy = H * 0.52;   // torso centre y
 
-      // ---- FOSSIL special render ----
+      const H1  = this.hsl;
+      const hue = p.finalHue;
+      const sat = p.colorSat;
+      const lit = p.colorLight;
+
+      // ---- FOSSIL ----
       if (p.fossil) {
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle   = "#555";
-        ctx.strokeStyle = "#333";
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle   = "#666";
+        ctx.strokeStyle = "#444";
         ctx.lineWidth   = 2;
         ctx.beginPath();
-        ctx.ellipse(cx, cy, p.bodyRx * 0.7, p.bodyRy * 0.7, 0, 0, Math.PI * 2);
+        ctx.ellipse(ox, oy, p.bodyLen * 0.55, p.bodyH * 0.9, 0, 0, Math.PI * 2);
         ctx.fill(); ctx.stroke();
-        // crack lines
-        ctx.strokeStyle = "#222";
-        ctx.lineWidth = 1.5;
-        for (let i = 0; i < 5; i++) {
-          const crackRng = this.makePrng(g.MOR + i * 31);
-          const sx = cx + (crackRng() - 0.5) * p.bodyRx * 1.2;
-          const sy = cy + (crackRng() - 0.5) * p.bodyRy * 1.2;
+        const crRng = this.makePrng(g.MOR + 11);
+        ctx.strokeStyle = "#333"; ctx.lineWidth = 1.2;
+        for (let i = 0; i < 6; i++) {
           ctx.beginPath();
+          const sx = ox + (crRng() - 0.5) * p.bodyLen;
+          const sy = oy + (crRng() - 0.5) * p.bodyH * 1.5;
           ctx.moveTo(sx, sy);
-          ctx.lineTo(sx + (crackRng() - 0.5) * 30, sy + (crackRng() - 0.5) * 30);
+          ctx.lineTo(sx + (crRng() - 0.5) * 28, sy + (crRng() - 0.5) * 28);
           ctx.stroke();
         }
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = 1;
         return;
       }
 
-      // ---- TAIL ----
-      if (p.hasTail && p.appendageScale > 0.2) {
-        const tScale = p.tailLen * p.appendageScale;
-        ctx.fillStyle = dim;
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(cx + p.bodyRx * 0.7, cy + 10);
-        ctx.quadraticCurveTo(
-          cx + p.bodyRx + tScale * 0.6, cy + tScale * 0.5,
-          cx + p.bodyRx + tScale,        cy
-        );
-        ctx.quadraticCurveTo(
-          cx + p.bodyRx + tScale * 0.6, cy - tScale * 0.3,
-          cx + p.bodyRx * 0.7, cy - 10
-        );
-        ctx.closePath();
-        ctx.fill(); ctx.stroke();
-      }
-
-      // ---- LIMBS ----
-      if (p.appendageScale > 0.1) {
-        ctx.fillStyle = dim;
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 2;
-        const limbLen = 22 * p.appendageScale;
-        const limbW   = 7  * p.appendageScale;
-        // bottom limbs
-        for (let i = 0; i < p.limbCount; i++) {
-          const spread = (p.limbCount - 1) * 0.5;
-          const lx = cx - spread * 22 + i * 22;
-          ctx.beginPath();
-          ctx.roundRect
-            ? ctx.roundRect(lx - limbW / 2, cy + p.bodyRy * 0.75, limbW, limbLen, 4)
-            : ctx.rect(lx - limbW / 2, cy + p.bodyRy * 0.75, limbW, limbLen);
-          ctx.fill(); ctx.stroke();
-        }
-      }
-
-      // ---- FINS (dorsal) ----
-      if (p.hasFins && p.appendageScale > 0.3) {
-        const fScale = p.finSize * p.appendageScale;
-        ctx.fillStyle   = `hsl(${p.finalHue}, ${p.colorSat}%, ${p.colorLight + 10}%)`;
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth   = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(cx - fScale, cy - p.bodyRy * 0.5);
-        ctx.lineTo(cx,           cy - p.bodyRy * 0.85 - fScale);
-        ctx.lineTo(cx + fScale, cy - p.bodyRy * 0.5);
-        ctx.closePath();
-        ctx.fill(); ctx.stroke();
-      }
-
-      // ---- MAIN BODY ----
-      ctx.fillStyle   = fill;
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth   = 3;
+      // ---- SHADOW ----
+      const shadowY  = oy + p.bodyH * sc + p.legLen * sc * 0.85;
+      const shadowGr = this.radGrad(ctx, ox, shadowY, 0, p.bodyLen * sc * 0.9, [
+        [0,   `hsla(0,0%,0%,0.18)`],
+        [1,   `hsla(0,0%,0%,0)`],
+      ]);
+      ctx.fillStyle = shadowGr;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, p.bodyRx, p.bodyRy, 0, 0, Math.PI * 2);
-      ctx.fill(); ctx.stroke();
+      ctx.ellipse(ox, shadowY, p.bodyLen * sc * 0.85, 7 * sc, 0, 0, Math.PI * 2);
+      ctx.fill();
 
-      // ---- PATTERN (inside body clip) ----
-      if (p.patternOpacity > 0.05 && p.patternType > 0) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, p.bodyRx - 2, p.bodyRy - 2, 0, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.globalAlpha = p.patternOpacity * 0.35;
-        ctx.fillStyle   = `hsl(${(p.finalHue + 40) % 360}, 60%, 70%)`;
+      // ---- ENERGY RIBBONS (behind body) ----
+      if (p.ornamentScale > 0.3) {
+        const ribRng = this.makePrng(g.ORN + 200);
+        for (let r = 0; r < p.ribbons; r++) {
+          const yOff   = (ribRng() - 0.5) * p.bodyH * sc * 0.9;
+          const ctrl1x = ox + p.bodyLen * sc * 0.8 + 20 + ribRng() * 30;
+          const ctrl1y = oy + yOff - 20 - ribRng() * 25;
+          const ctrl2x = ctrl1x + 30 + ribRng() * 50;
+          const ctrl2y = oy + yOff + (ribRng() - 0.5) * 40;
+          const endX   = ctrl2x + 20 + ribRng() * 40;
+          const endY   = ctrl2y + (ribRng() - 0.5) * 30;
+          const alpha  = 0.55 + ribRng() * 0.35;
+          const w      = (2 + ribRng() * 3) * p.ornamentScale;
 
-        if (p.patternType === 1) {
-          // spots
-          const spotRng = this.makePrng(g.ORN + 7);
-          for (let i = 0; i < 8; i++) {
-            const sx = cx + (spotRng() - 0.5) * p.bodyRx * 1.4;
-            const sy = cy + (spotRng() - 0.5) * p.bodyRy * 1.4;
-            const sr = 4 + spotRng() * 8;
-            ctx.beginPath();
-            ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        } else {
-          // stripes
-          for (let i = -4; i <= 4; i++) {
-            ctx.fillRect(cx + i * 14 - 4, cy - p.bodyRy, 7, p.bodyRy * 2);
-          }
-        }
-        ctx.restore();
-        ctx.globalAlpha = 1.0;
-      }
-
-      // ---- HORNS ----
-      if (p.hasHorns && p.ornamentScale > 0.05) {
-        const hLen = p.hornLen * p.ornamentScale;
-        ctx.fillStyle   = `hsl(${(p.finalHue + 20) % 360}, 50%, 35%)`;
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth   = 1.5;
-        // left horn
-        ctx.beginPath();
-        ctx.moveTo(cx - 18, cy - p.bodyRy * 0.7);
-        ctx.lineTo(cx - 22, cy - p.bodyRy * 0.7 - hLen);
-        ctx.lineTo(cx - 12, cy - p.bodyRy * 0.7 - hLen * 0.3);
-        ctx.closePath();
-        ctx.fill(); ctx.stroke();
-        // right horn
-        ctx.beginPath();
-        ctx.moveTo(cx + 18, cy - p.bodyRy * 0.7);
-        ctx.lineTo(cx + 22, cy - p.bodyRy * 0.7 - hLen);
-        ctx.lineTo(cx + 12, cy - p.bodyRy * 0.7 - hLen * 0.3);
-        ctx.closePath();
-        ctx.fill(); ctx.stroke();
-      }
-
-      // ---- SPIKES ----
-      if (p.spikeCount > 0 && p.ornamentScale > 0.2) {
-        const sLen = 10 * p.ornamentScale;
-        ctx.fillStyle   = `hsl(${(p.finalHue + 30) % 360}, 55%, 40%)`;
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth   = 1;
-        for (let i = 0; i < p.spikeCount; i++) {
-          const angle = (Math.PI * 2 / p.spikeCount) * i - Math.PI / 2;
-          const bx    = cx + Math.cos(angle) * p.bodyRx * 0.9;
-          const by    = cy + Math.sin(angle) * p.bodyRy * 0.9;
-          const ox    = Math.cos(angle) * sLen;
-          const oy    = Math.sin(angle) * sLen;
+          ctx.globalAlpha = alpha * p.ornamentScale;
+          ctx.strokeStyle = H1((p.orbHue + r * 20) % 360, sat + 30, lit + 30);
+          ctx.lineWidth   = w * sc;
+          ctx.lineCap     = "round";
           ctx.beginPath();
-          ctx.moveTo(bx - oy * 0.3, by + ox * 0.3);
-          ctx.lineTo(bx + ox,       by + oy);
-          ctx.lineTo(bx + oy * 0.3, by - ox * 0.3);
-          ctx.closePath();
-          ctx.fill(); ctx.stroke();
-        }
-      }
-
-      // ---- FRILLS ----
-      if (p.hasFrills && p.ornamentScale > 0.25) {
-        const fLen = p.frillSize * p.ornamentScale;
-        ctx.strokeStyle = `hsl(${p.finalHue}, ${p.colorSat + 10}%, ${p.colorLight + 15}%)`;
-        ctx.lineWidth   = 2;
-        for (let i = -2; i <= 2; i++) {
-          ctx.globalAlpha = 0.7;
-          ctx.beginPath();
-          ctx.moveTo(cx + i * 10, cy - p.bodyRy * 0.85);
-          ctx.lineTo(cx + i * 10, cy - p.bodyRy * 0.85 - fLen);
+          ctx.moveTo(ox + p.bodyLen * sc * 0.6, oy + yOff);
+          ctx.bezierCurveTo(ctrl1x, ctrl1y, ctrl2x, ctrl2y, endX, endY);
           ctx.stroke();
         }
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = 1; ctx.lineCap = "butt";
+      }
+
+      // ---- BACK LEGS (behind body, slightly muted) ----
+      this._drawLeg(ctx, p, sc, ox + p.bodyLen * sc * 0.52, oy + p.bodyH * sc * 0.55,
+                    hue, sat - 8, lit - 10, true);
+      this._drawLeg(ctx, p, sc, ox - p.bodyLen * sc * 0.18, oy + p.bodyH * sc * 0.55,
+                    hue, sat - 8, lit - 10, true);
+
+      // ---- TAIL ----
+      this._drawTail(ctx, p, sc, ox, oy, hue, sat, lit);
+
+      // ---- TORSO ----
+      // Underbelly gradient
+      const torsoGr = this.linGrad(ctx,
+        ox, oy - p.bodyH * sc,
+        ox, oy + p.bodyH * sc,
+        [
+          [0,   H1(hue, sat - 5,  lit - 8)],
+          [0.4, H1(hue, sat,      lit)],
+          [1,   H1(hue, sat - 12, lit + 14)], // lighter belly
+        ]
+      );
+      ctx.fillStyle   = torsoGr;
+      ctx.strokeStyle = H1(hue, sat, lit - 18);
+      ctx.lineWidth   = 1.8;
+      ctx.beginPath();
+      // Slightly longer horizontally than tall — fox-like torso
+      ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, -0.08, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // ---- CHEST MARKING ----
+      if (p.hasChestMark && p.ornamentScale > 0.2) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, -0.08, 0, Math.PI * 2);
+        ctx.clip();
+        const chestGr = this.radGrad(ctx,
+          ox - p.bodyLen * sc * 0.35, oy,
+          0, p.bodyLen * sc * 0.45,
+          [
+            [0,   H1(hue, sat - 20, lit + 28, 0.65)],
+            [0.6, H1(hue, sat - 10, lit + 14, 0.25)],
+            [1,   H1(hue, sat,      lit,       0)],
+          ]
+        );
+        ctx.fillStyle = chestGr;
+        ctx.fillRect(ox - p.bodyLen * sc, oy - p.bodyH * sc, p.bodyLen * sc * 2, p.bodyH * sc * 2);
+        ctx.restore();
+      }
+
+      // ---- PATTERN (spots / dapple) ----
+      if (p.patternOpacity > 0.1 && p.patternType > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(ox, oy, p.bodyLen * sc - 2, p.bodyH * sc - 2, -0.08, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.globalAlpha = p.patternOpacity * 0.22;
+        ctx.fillStyle   = H1((hue + 35) % 360, sat + 10, lit + 20);
+        const patRng = this.makePrng(g.ORN + 77);
+        if (p.patternType === 1) {
+          // subtle spots
+          for (let i = 0; i < 10; i++) {
+            const sx = ox + (patRng() - 0.5) * p.bodyLen * sc * 1.6;
+            const sy = oy + (patRng() - 0.5) * p.bodyH * sc * 1.6;
+            const sr = (3 + patRng() * 6) * sc;
+            ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+          }
+        } else {
+          // dapple — large soft blobs
+          for (let i = 0; i < 5; i++) {
+            const sx = ox + (patRng() - 0.5) * p.bodyLen * sc * 1.2;
+            const sy = oy + (patRng() - 0.5) * p.bodyH * sc;
+            ctx.beginPath();
+            ctx.ellipse(sx, sy, (8 + patRng() * 14) * sc, (5 + patRng() * 10) * sc, patRng() * Math.PI, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore(); ctx.globalAlpha = 1;
+      }
+
+      // ---- FRONT LEGS (in front of body) ----
+      this._drawLeg(ctx, p, sc, ox + p.bodyLen * sc * 0.42, oy + p.bodyH * sc * 0.6,
+                    hue, sat, lit, false);
+      this._drawLeg(ctx, p, sc, ox - p.bodyLen * sc * 0.08, oy + p.bodyH * sc * 0.6,
+                    hue, sat, lit, false);
+
+      // ---- NECK ----
+      const headX = ox - p.bodyLen * sc * 0.68;
+      const headY = oy - p.bodyH * sc * 0.35;
+      const neckGr = this.linGrad(ctx, ox - p.bodyLen * sc * 0.5, oy - p.bodyH * sc * 0.1,
+                                  headX, headY + p.headSize * sc * 0.4,
+        [
+          [0,   H1(hue, sat - 5, lit - 5)],
+          [1,   H1(hue, sat,     lit)],
+        ]
+      );
+      ctx.fillStyle   = neckGr;
+      ctx.strokeStyle = H1(hue, sat, lit - 18);
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(ox - p.bodyLen * sc * 0.42, oy - p.bodyH * sc * 0.5);
+      ctx.quadraticCurveTo(
+        ox - p.bodyLen * sc * 0.58, oy - p.bodyH * sc * 0.2,
+        headX + p.headSize * sc * 0.55, headY + p.headSize * sc * 0.5
+      );
+      ctx.quadraticCurveTo(
+        ox - p.bodyLen * sc * 0.52, oy,
+        ox - p.bodyLen * sc * 0.32, oy + p.bodyH * sc * 0.1
+      );
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      // ---- MANE ----
+      if (p.hasMane && p.ornamentScale > 0.2) {
+        const maneRng = this.makePrng(g.ORN + 555);
+        ctx.strokeStyle = H1(hue, sat - 10, lit + 22);
+        ctx.lineCap = "round";
+        for (let i = 0; i < 7; i++) {
+          const t      = i / 6;
+          const mx     = ox - p.bodyLen * sc * (0.45 + t * 0.28);
+          const my     = oy - p.bodyH * sc * (0.55 + t * 0.15);
+          const len    = (8 + maneRng() * 12) * sc * p.ornamentScale;
+          const angle  = -0.4 - maneRng() * 0.5;
+          ctx.globalAlpha = 0.55 + maneRng() * 0.3;
+          ctx.lineWidth   = (1.5 + maneRng() * 2) * sc;
+          ctx.beginPath();
+          ctx.moveTo(mx, my);
+          ctx.lineTo(mx + Math.cos(angle) * len, my + Math.sin(angle) * len);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1; ctx.lineCap = "butt";
       }
 
       // ---- HEAD ----
-      const headR = p.bodyRx * p.headRatio;
-      const headY = cy - p.bodyRy * 0.72;
-      ctx.fillStyle   = fill;
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth   = 2.5;
+      const hR = p.headSize * sc;
+      // Head gradient — lighter face, darker crown
+      const headGr = this.radGrad(ctx, headX - hR * 0.15, headY + hR * 0.2, hR * 0.1, hR * 1.1,
+        [
+          [0,   H1(hue, sat - 18, lit + 22)],
+          [0.5, H1(hue, sat,      lit)],
+          [1,   H1(hue, sat + 5,  lit - 12)],
+        ]
+      );
+      ctx.fillStyle   = headGr;
+      ctx.strokeStyle = H1(hue, sat, lit - 18);
+      ctx.lineWidth   = 1.8;
       ctx.beginPath();
-      ctx.arc(cx, headY, headR, 0, Math.PI * 2);
+      ctx.arc(headX, headY, hR, 0, Math.PI * 2);
       ctx.fill(); ctx.stroke();
 
-      // ---- EYES ----
-      const eyeOff  = headR * 0.38;
-      const eyeR    = p.eyeRadius;
-      // sclera
-      ctx.fillStyle = "#eee";
+      // Snout
+      const snoutX = headX - hR * 0.72;
+      const snoutY = headY + hR * 0.18;
+      ctx.fillStyle   = H1(hue, sat - 5, lit + 12);
+      ctx.strokeStyle = H1(hue, sat, lit - 18);
+      ctx.lineWidth   = 1.2;
       ctx.beginPath();
-      ctx.arc(cx - eyeOff, headY - 2, eyeR, 0, Math.PI * 2);
-      ctx.arc(cx + eyeOff, headY - 2, eyeR, 0, Math.PI * 2);
-      ctx.fill();
-      // pupil
-      ctx.fillStyle = "#111";
+      ctx.ellipse(snoutX, snoutY, hR * 0.44, hR * 0.28, -0.15, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // Nose
+      ctx.fillStyle = H1(hue, sat + 10, lit - 30);
       ctx.beginPath();
-      ctx.arc(cx - eyeOff + 1, headY - 1, eyeR * 0.55, 0, Math.PI * 2);
-      ctx.arc(cx + eyeOff + 1, headY - 1, eyeR * 0.55, 0, Math.PI * 2);
+      ctx.ellipse(snoutX - hR * 0.22, snoutY - hR * 0.06, hR * 0.12, hR * 0.08, -0.2, 0, Math.PI * 2);
       ctx.fill();
 
-      // ---- GLOW NODES (fertility / ornament) ----
-      if (p.glowNodes > 0 && p.ornamentScale > 0.4) {
-        const glowRng = this.makePrng(g.ORN + 99);
-        ctx.globalAlpha = p.ornamentScale * (p.fertile ? 0.9 : 0.5);
-        for (let i = 0; i < p.glowNodes; i++) {
-          const angle = glowRng() * Math.PI * 2;
-          const dist  = glowRng() * p.bodyRx * 0.7;
-          const gx    = cx + Math.cos(angle) * dist;
-          const gy    = cy + Math.sin(angle) * dist;
-          const grad  = ctx.createRadialGradient(gx, gy, 0, gx, gy, 10);
-          grad.addColorStop(0,   `hsl(${(p.finalHue + 60) % 360}, 100%, 85%)`);
-          grad.addColorStop(1,   `hsla(${p.finalHue}, 80%, 60%, 0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(gx, gy, 10, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1.0;
+      // ---- EARS ----
+      this._drawEar(ctx, p, sc, headX, headY, hue, sat, lit, -1, false); // back ear
+      this._drawEar(ctx, p, sc, headX, headY, hue, sat, lit,  1, true);  // front ear
+
+      // ---- EYE ----
+      const eyeX = headX - hR * 0.28;
+      const eyeY = headY - hR * 0.14;
+      const eyeR = p.eyeRadius * sc;
+      // Iris
+      const irisGr = this.radGrad(ctx, eyeX - eyeR * 0.2, eyeY - eyeR * 0.2, 0, eyeR,
+        [
+          [0,   H1((hue + 120) % 360, 70, 75)],
+          [0.6, H1((hue + 90)  % 360, 80, 50)],
+          [1,   H1((hue + 60)  % 360, 60, 25)],
+        ]
+      );
+      ctx.fillStyle = irisGr;
+      ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+      // Pupil
+      ctx.fillStyle = "#0a0a14";
+      ctx.beginPath(); ctx.ellipse(eyeX + eyeR * 0.05, eyeY, eyeR * 0.42, eyeR * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+      // Highlights
+      ctx.fillStyle = "rgba(255,255,255,0.88)";
+      ctx.beginPath(); ctx.arc(eyeX - eyeR * 0.28, eyeY - eyeR * 0.28, eyeR * 0.22, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath(); ctx.arc(eyeX + eyeR * 0.2, eyeY + eyeR * 0.15, eyeR * 0.12, 0, Math.PI * 2); ctx.fill();
+      // Outline
+      ctx.strokeStyle = H1(hue, sat, lit - 25); ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.stroke();
+
+      // ---- DORSAL WING / FIN (if present) ----
+      if (p.hasWings && p.ornamentScale > 0.35) {
+        const wS = p.wingSpan * sc * p.ornamentScale;
+        const wx = ox - p.bodyLen * sc * 0.1;
+        const wy = oy - p.bodyH * sc * 0.88;
+        ctx.fillStyle   = H1(hue, sat + 10, lit + 16, 0.7);
+        ctx.strokeStyle = H1(hue, sat, lit - 10, 0.8);
+        ctx.lineWidth   = 1.2;
+        ctx.globalAlpha = 0.78;
+        ctx.beginPath();
+        ctx.moveTo(wx - wS * 0.5, wy + wS * 0.35);
+        ctx.quadraticCurveTo(wx - wS * 0.3, wy - wS * 0.4, wx, wy - wS);
+        ctx.quadraticCurveTo(wx + wS * 0.3, wy - wS * 0.4, wx + wS * 0.5, wy + wS * 0.35);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // ---- GLOWING ORB NODES on tail ----
+      if (p.ornamentScale > 0.4) {
+        this._drawOrbNodes(ctx, p, sc, ox, oy, g);
       }
 
       // ---- FERTILITY AURA ----
       if (p.fertile) {
-        ctx.globalAlpha = 0.18;
-        const aura = ctx.createRadialGradient(cx, cy, p.bodyRx * 0.5, cx, cy, p.bodyRx * 1.5);
-        aura.addColorStop(0,   `hsl(${(p.finalHue + 60) % 360}, 100%, 80%)`);
-        aura.addColorStop(1,   `hsla(${p.finalHue}, 60%, 50%, 0)`);
+        ctx.globalAlpha = 0.14;
+        const aura = this.radGrad(ctx, ox, oy, p.bodyLen * sc * 0.3, p.bodyLen * sc * 1.6,
+          [
+            [0, H1((hue + 60) % 360, 100, 85)],
+            [1, H1(hue, 60, 50, 0)],
+          ]
+        );
         ctx.fillStyle = aura;
-        ctx.beginPath();
-        ctx.arc(cx, cy, p.bodyRx * 1.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1.0;
+        ctx.beginPath(); ctx.arc(ox, oy, p.bodyLen * sc * 1.6, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
       }
+    },
+
+    // ----------------------------------------------------------
+    // Draw a single leg + paw
+    // ----------------------------------------------------------
+    _drawLeg(ctx, p, sc, x, y, hue, sat, lit, behind) {
+      const lLen = p.legLen * sc;
+      const lW   = p.legThick * sc;
+      const alpha = behind ? 0.62 : 1.0;
+      ctx.globalAlpha = alpha;
+
+      // Upper leg
+      const legGr = this.linGrad(ctx, x, y, x + lW * 0.3, y + lLen * 0.6,
+        [
+          [0, this.hsl(hue, sat - 5, lit - 5)],
+          [1, this.hsl(hue, sat - 10, lit - 14)],
+        ]
+      );
+      ctx.fillStyle   = legGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - lW * 0.5, y);
+      ctx.quadraticCurveTo(x - lW * 0.7, y + lLen * 0.5, x - lW * 0.3, y + lLen * 0.7);
+      ctx.lineTo(x + lW * 0.3, y + lLen * 0.7);
+      ctx.quadraticCurveTo(x + lW * 0.7, y + lLen * 0.5, x + lW * 0.5, y);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      // Paw
+      ctx.fillStyle   = this.hsl(hue, sat - 15, lit + 10);
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(x, y + lLen * 0.72, lW * 0.72, lW * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
+    // Draw tail with flowing shape
+    // ----------------------------------------------------------
+    _drawTail(ctx, p, sc, ox, oy, hue, sat, lit) {
+      const tX0 = ox + p.bodyLen * sc * 0.82;
+      const tY0 = oy - p.bodyH * sc * 0.08;
+      const curl = p.tailCurve;
+
+      const cp1x = tX0 + 32 * sc;
+      const cp1y = tY0 - 30 * sc * curl;
+      const cp2x = tX0 + 65 * sc;
+      const cp2y = tY0 - 55 * sc * curl;
+      const endX = tX0 + 55 * sc;
+      const endY = tY0 - 78 * sc * curl;
+
+      // Base tail shape — fluffy
+      const tailGr = this.linGrad(ctx, tX0, tY0, endX, endY,
+        [
+          [0,   this.hsl(hue, sat - 5,  lit - 8)],
+          [0.5, this.hsl(hue, sat,      lit + 4)],
+          [1,   this.hsl((hue + 30) % 360, sat + 15, lit + 18)],
+        ]
+      );
+      ctx.fillStyle   = tailGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 14);
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(tX0, tY0 + 10 * sc);
+      ctx.bezierCurveTo(cp1x, cp1y + 12 * sc, cp2x + 4 * sc, cp2y + 10 * sc, endX + 8 * sc, endY);
+      ctx.bezierCurveTo(cp2x - 6 * sc, cp2y - 14 * sc, cp1x - 10 * sc, cp1y - 12 * sc, tX0, tY0 - 10 * sc);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      // Fluffy tip — lighter burst
+      const tipGr = this.radGrad(ctx, endX, endY, 0, 20 * sc,
+        [
+          [0,   this.hsl((hue + 40) % 360, sat + 20, lit + 32, 0.9)],
+          [0.6, this.hsl((hue + 20) % 360, sat + 10, lit + 18, 0.5)],
+          [1,   this.hsl(hue, sat, lit, 0)],
+        ]
+      );
+      ctx.fillStyle = tipGr;
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath(); ctx.arc(endX, endY, 20 * sc, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
+    // Draw a pointed ear
+    // ----------------------------------------------------------
+    _drawEar(ctx, p, sc, headX, headY, hue, sat, lit, side, front) {
+      const hR   = p.headSize * sc;
+      const eH   = p.earH * sc;
+      const eW   = p.earW * sc;
+      const baseX = headX - hR * 0.12 + (side < 0 ? -hR * 0.28 : hR * 0.28);
+      const baseY = headY - hR * 0.62;
+      const tipX  = baseX + (side < 0 ? -eW * 0.3 : eW * 0.3);
+      const tipY  = baseY - eH;
+      ctx.globalAlpha = front ? 1.0 : 0.7;
+
+      // Outer ear
+      ctx.fillStyle   = this.hsl(hue, sat + 5, lit - 5);
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 20);
+      ctx.lineWidth   = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(baseX - eW * 0.55, baseY);
+      ctx.quadraticCurveTo(baseX - eW * 0.7, baseY - eH * 0.5, tipX, tipY);
+      ctx.quadraticCurveTo(baseX + eW * 0.7, baseY - eH * 0.5, baseX + eW * 0.55, baseY);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      // Inner ear — pinkish/contrasting
+      if (front && p.ornamentScale > 0.1) {
+        ctx.fillStyle = this.hsl((hue + 15) % 360, sat + 20, lit + 20, 0.65);
+        ctx.beginPath();
+        ctx.moveTo(baseX - eW * 0.3, baseY - eH * 0.12);
+        ctx.quadraticCurveTo(baseX - eW * 0.35, baseY - eH * 0.55, tipX, tipY + eH * 0.22);
+        ctx.quadraticCurveTo(baseX + eW * 0.35, baseY - eH * 0.55, baseX + eW * 0.3, baseY - eH * 0.12);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
+    // Draw glowing orb nodes along the tail
+    // ----------------------------------------------------------
+    _drawOrbNodes(ctx, p, sc, ox, oy, g) {
+      const orbRng = this.makePrng(g.ORN + 888);
+      const tX0    = ox + p.bodyLen * sc * 0.82;
+      const tY0    = oy - p.bodyH * sc * 0.08;
+
+      for (let i = 0; i < p.glowOrbs; i++) {
+        const t  = (i + 1) / (p.glowOrbs + 1);
+        // Place orbs along the tail bezier (linear approximation)
+        const curl = p.tailCurve;
+        const bx = tX0 + (32 + t * 33) * sc;
+        const by = tY0 - (t * 55 * curl + (orbRng() - 0.5) * 10) * sc;
+
+        const orbR    = (5 + orbRng() * 5) * sc * p.ornamentScale;
+        const orbHue  = (p.orbHue + i * 25) % 360;
+        const isPrimary = i % 2 === 0;
+
+        // Outer glow
+        const glowGr = this.radGrad(ctx, bx, by, 0, orbR * 2.8,
+          [
+            [0,   this.hsl(orbHue, 100, 88, 0.7)],
+            [0.4, this.hsl(orbHue,  90, 70, 0.35)],
+            [1,   this.hsl(orbHue,  80, 55, 0)],
+          ]
+        );
+        ctx.fillStyle = glowGr;
+        ctx.globalAlpha = 0.8 * p.ornamentScale;
+        ctx.beginPath(); ctx.arc(bx, by, orbR * 2.8, 0, Math.PI * 2); ctx.fill();
+
+        // Orb body
+        const orbGr = this.radGrad(ctx, bx - orbR * 0.3, by - orbR * 0.3, 0, orbR,
+          [
+            [0,   this.hsl(orbHue, 60, 95)],
+            [0.5, this.hsl(orbHue, 90, 72)],
+            [1,   this.hsl(orbHue, 100, 45)],
+          ]
+        );
+        ctx.globalAlpha = p.ornamentScale;
+        ctx.fillStyle   = orbGr;
+        ctx.strokeStyle = this.hsl(orbHue, 80, 60, 0.6);
+        ctx.lineWidth   = 0.7;
+        ctx.beginPath(); ctx.arc(bx, by, orbR, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        // Specular
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.globalAlpha = p.ornamentScale * 0.8;
+        ctx.beginPath(); ctx.arc(bx - orbR * 0.32, by - orbR * 0.32, orbR * 0.28, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
     }
   },
-  template: `<canvas ref="canvas" width="300" height="300"></canvas>`
+  template: `<canvas ref="canvas" width="400" height="320" style="max-width:100%;"></canvas>`
 };
 
 // ---- GenomeTableComponent ----
