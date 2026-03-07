@@ -158,7 +158,7 @@ function keychainLogin(username, callback) {
 // lifecycleStage  : string — "Juvenile" | "Fertile Adult" | "Elder" | "Fossil"
 // callback        : (response) => { response.success, response.message }
 function publishCreature(username, genome, unicodeArt, creatureName, age, lifecycleStage, title, callback) {
-  const permlink = buildPermlink("steembiota-" + creatureName.toLowerCase());
+  const permlink = buildPermlink(title);
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
 
   const body =
@@ -201,7 +201,7 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
 //
 // breedInfo: { mutated, speciated, parentA: {author,permlink}, parentB: {author,permlink} }
 function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo, title, callback) {
-  const permlink = buildPermlink("steembiota-offspring-" + creatureName.toLowerCase());
+  const permlink = buildPermlink(title);
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
   const pA = breedInfo.parentA;
   const pB = breedInfo.parentB;
@@ -358,15 +358,76 @@ function parseFeedEvents(replies, creatureAuthor) {
 
 // ---- Utility ----
 
+// Build a Steem permlink from an arbitrary title string.
+// Lowercases, replaces whitespace/punctuation with hyphens,
+// strips non-ASCII, truncates the slug at 200 chars, then
+// appends a millisecond timestamp so it is always unique.
 function buildPermlink(title) {
   const slug = title
-    .toLowerCase().trim()
+    .toLowerCase()
+    .trim()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 241);
+    .replace(/^-|-$/, "")
+    .slice(0, 200);                       // leave room for -<13-digit timestamp>
   return `${slug}-${Date.now()}`;
+}
+
+// Format a Date into a natural-language birth phrase.
+// e.g. "born at noon on Tuesday, March 4, 2025"
+//      "born at 7 in the morning on Monday, January 3, 2026"
+function formatBirthTime(date) {
+  if (!(date instanceof Date) || isNaN(date)) date = new Date();
+
+  const DAYS   = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const MONTHS = ["January","February","March","April","May","June",
+                  "July","August","September","October","November","December"];
+
+  const hour    = date.getHours();
+  const weekday = DAYS[date.getDay()];
+  const month   = MONTHS[date.getMonth()];
+  const day     = date.getDate();
+  const year    = date.getFullYear();
+
+  // Convert 0–23 hour to a natural English time-of-day phrase
+  const HOUR_PHRASES = [
+    "midnight",             // 0
+    "1 in the morning",     // 1
+    "2 in the morning",     // 2
+    "3 in the morning",     // 3
+    "4 in the morning",     // 4
+    "5 in the morning",     // 5
+    "6 in the morning",     // 6
+    "7 in the morning",     // 7
+    "8 in the morning",     // 8
+    "9 in the morning",     // 9
+    "10 in the morning",    // 10
+    "11 in the morning",    // 11
+    "noon",                 // 12
+    "1 in the afternoon",   // 13
+    "2 in the afternoon",   // 14
+    "3 in the afternoon",   // 15
+    "4 in the afternoon",   // 16
+    "5 in the afternoon",   // 17
+    "6 in the evening",     // 18
+    "7 in the evening",     // 19
+    "8 in the evening",     // 20
+    "9 at night",           // 21
+    "10 at night",          // 22
+    "11 at night",          // 23
+  ];
+
+  const timePhrase = HOUR_PHRASES[hour];
+  return `born at ${timePhrase} on ${weekday}, ${month} ${day}, ${year}`;
+}
+
+// Build the default post title for a creature.
+// type      : "Founder" | "Offspring"
+// birthDate : Date object (defaults to now)
+function buildDefaultTitle(creatureName, type, birthDate) {
+  const born = formatBirthTime(birthDate instanceof Date ? birthDate : new Date());
+  return `${creatureName} (${type}) — ${born}`;
 }
 
 function steemDate(ts) {

@@ -1245,7 +1245,7 @@ const BreedingPanelComponent = {
         this.childGenome = child;
         this.childName   = generateFullName(child);
         this.childArt    = buildUnicodeArt(child, 0);
-        this.customTitle = `🧬 ${this.childName} (Offspring)`;
+        this.customTitle = buildDefaultTitle(this.childName, "Offspring", new Date());
         this.breedInfo   = { mutated, speciated,
           parentA: { author: resA.author, permlink: resA.permlink },
           parentB: { author: resB.author, permlink: resB.permlink }

@@ -673,7 +673,7 @@ const HomeView = {
       this.genome         = generateGenome();
       this.feedState      = null;
       this.unicodeArt     = buildUnicodeArt(this.genome, 0, null);
-      this.customTitle    = `❇ ${generateFullName(this.genome)} (Founder)`;
+      this.customTitle    = buildDefaultTitle(generateFullName(this.genome), "Founder", new Date(this.birthTimestamp));
     },
 
     async publishCreature() {
