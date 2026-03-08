@@ -265,14 +265,69 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
   );
 }
 
-// ---- SteemBiota — publish a feeding event as a reply ----
+// ---- SteemBiota — post a birth-announcement reply to a parent's post ----
+//
+// Called once per parent after a successful offspring publish.
+// parentAuthor    : string — author of the parent post
+// parentPermlink  : string — permlink of the parent post
+// childAuthor     : string — the user who published the offspring
+// childPermlink   : string — permlink of the newly published offspring post
+// childName       : string — display name of the offspring
+// childGenome     : object — offspring genome
+// unicodeArt      : string — current unicode art of the offspring (newborn, age 0)
+// breedInfo       : { mutated, speciated }
+// callback        : (response) => { response.success, response.message }
+function publishBirthReply(parentAuthor, parentPermlink, childAuthor, childPermlink, childName, childGenome, unicodeArt, breedInfo, callback) {
+  const replyPermlink = buildPermlink("steembiota-birth-" + childName.toLowerCase());
+  const sexLabel      = childGenome.SX === 0 ? "♂ Male" : "♀ Female";
+  const childUrl      = `${APP_URL}/#/@${childAuthor}/${childPermlink}`;
+
+  const mutLine = breedInfo.speciated
+    ? "⚡ **Speciation** — a new genus emerged!"
+    : breedInfo.mutated
+      ? "🧬 **Mutation** occurred during breeding"
+      : "✔ Clean inheritance";
+
+  const body =
+    `🍼 **New Offspring Born!**\n\n` +
+    `**${childName}** has been born.\n\n` +
+    `**Sex:** ${sexLabel}  \n` +
+    `**Genus ID:** ${childGenome.GEN}  \n` +
+    `**Lifespan:** ${childGenome.LIF} days  \n` +
+    `${mutLine}  \n\n` +
+    `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` +
+    `🔗 [View ${childName} on SteemBiota](${childUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota"],
+    steembiota: {
+      version: "1.0",
+      type: "birth",
+      child: { author: childAuthor, permlink: childPermlink },
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(
+    childAuthor, "", body,
+    parentPermlink, parentAuthor,
+    jsonMetadata, replyPermlink,
+    ["steembiota"],
+    callback
+  );
+}
+
+
 //
 // creatureAuthor  : string — author of the creature post
 // creaturePermlink: string — permlink of the creature post
 // creatureName    : string — display name for the reply body
 // foodType        : "nectar" | "fruit" | "crystal"
+// unicodeArt      : string — current unicode art snapshot (from buildUnicodeArt)
 // callback        : (response) => { response.success, response.message }
-function publishFeed(username, creatureAuthor, creaturePermlink, creatureName, foodType, callback) {
+function publishFeed(username, creatureAuthor, creaturePermlink, creatureName, foodType, unicodeArt, callback) {
   const permlink = buildPermlink("steembiota-feed-" + creatureName.toLowerCase());
 
   const foodEmoji = { nectar: "🍯", fruit: "🍎", crystal: "💎" }[foodType] || "🍃";
@@ -280,9 +335,14 @@ function publishFeed(username, creatureAuthor, creaturePermlink, creatureName, f
 
   const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
 
+  const artBlock = unicodeArt
+    ? `\`\`\`\n${unicodeArt}\n\`\`\`\n\n`
+    : "";
+
   const body =
     `${foodEmoji} **Feeding Event** — ${foodLabel}\n\n` +
     `@${username} fed **${creatureName}** with ${foodLabel}.\n\n` +
+    artBlock +
     `\`\`\`\nSTEEMBIOTA_FEED\ncreature: @${creatureAuthor}/${creaturePermlink}\nfood: ${foodType}\nfeeder: ${username}\n\`\`\`\n\n` +
     `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
     `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;

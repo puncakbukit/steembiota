@@ -182,6 +182,7 @@ const CreatureCanvasComponent = {
     canvasW:   { type: Number,  default: 400   },
     canvasH:   { type: Number,  default: 320   }
   },
+  emits: ["facing-resolved"],
   data() {
     // Direction is chosen once at component creation — purely random,
     // not derived from the genome so it varies each time the page loads.
@@ -193,7 +194,10 @@ const CreatureCanvasComponent = {
     fossil()    { this.$nextTick(() => this.draw()); },
     feedState() { this.$nextTick(() => this.draw()); }
   },
-  mounted() { this.draw(); },
+  mounted() {
+    this.$emit("facing-resolved", this.facingRight);
+    this.draw();
+  },
   methods: {
 
     // ----------------------------------------------------------
@@ -960,7 +964,8 @@ const FeedingPanelComponent = {
   name: "FeedingPanelComponent",
   props: {
     username:   String,
-    initialUrl: { type: String, default: "" }   // pre-fill + auto-load from CreatureView
+    initialUrl: { type: String, default: "" },   // pre-fill + auto-load from CreatureView
+    unicodeArt: { type: String, default: "" }    // current unicode snapshot passed in by parent
   },
   emits: ["notify", "feed-state-updated"],
   data() {
@@ -974,6 +979,7 @@ const FeedingPanelComponent = {
       creatureAuthor:   null,
       creaturePermlink: null,
       creatureName:     null,
+      creatureGenome:   null,   // stored so we can build unicode art on feed
       feedEvents:       null,   // raw result from parseFeedEvents()
       feedState:        null,   // computed from computeFeedState()
       // Rate-limit check
@@ -1024,6 +1030,7 @@ const FeedingPanelComponent = {
       this.creatureAuthor   = null;
       this.creaturePermlink = null;
       this.creatureName     = null;
+      this.creatureGenome   = null;
       this.feedEvents       = null;
       this.feedState        = null;
       this.alreadyFedToday  = false;
@@ -1045,6 +1052,7 @@ const FeedingPanelComponent = {
         this.creatureAuthor   = author;
         this.creaturePermlink = permlink;
         this.creatureName     = meta.steembiota.name || author;
+        this.creatureGenome   = meta.steembiota.genome || null;
 
         // Fetch all replies and parse feed events
         const replies = await fetchAllReplies(author, permlink);
@@ -1081,6 +1089,11 @@ const FeedingPanelComponent = {
         this.$emit("notify", "Steem Keychain is not installed.", "error");
         return;
       }
+      // Build the current unicode art snapshot for embedding in the reply.
+      // Prefer the prop passed in by the parent (already direction-synced);
+      // fall back to building from the stored genome at age 0 if unavailable.
+      const artSnapshot = this.unicodeArt ||
+        (this.creatureGenome ? buildUnicodeArt(this.creatureGenome, 0, this.feedState) : "");
       this.publishing = true;
       publishFeed(
         this.username,
@@ -1088,6 +1101,7 @@ const FeedingPanelComponent = {
         this.creaturePermlink,
         this.creatureName,
         this.foodType,
+        artSnapshot,
         (response) => {
           this.publishing = false;
           if (response.success) {
@@ -1241,7 +1255,8 @@ const BreedingPanelComponent = {
       childArt:    null,
       breedInfo:   null,
       publishing:  false,
-      customTitle: ""       // pre-filled with default; user may edit before publishing
+      customTitle: "",       // pre-filled with default; user may edit before publishing
+      _facingRight: false    // synced from child canvas component
     };
   },
   computed: {
@@ -1309,9 +1324,10 @@ const BreedingPanelComponent = {
         // ---- Breed ----
         this.loadStatus = "";
         const { child, mutated, speciated } = breedGenomes(resA.genome, resB.genome);
+        this._facingRight = Math.random() < 0.5;
         this.childGenome = child;
         this.childName   = generateFullName(child);
-        this.childArt    = buildUnicodeArt(child, 0);
+        this.childArt    = buildUnicodeArt(child, 0, null, this._facingRight);
         this.customTitle = buildDefaultTitle(this.childName, new Date());
         this.breedInfo   = { mutated, speciated,
           parentA: { author: resA.author, permlink: resA.permlink },
@@ -1344,6 +1360,37 @@ const BreedingPanelComponent = {
         (response) => {
           this.publishing = false;
           if (response.success) {
+            // Extract the child permlink from the response (Keychain returns it in result)
+            // Steem Keychain response structure varies; derive permlink from the title we used
+            const childPermlink = buildPermlink(this.customTitle);
+
+            // Fire birth-announcement replies to both parents (best-effort, non-blocking)
+            const art = this.childArt || "";
+            const breedMeta = this.breedInfo;
+            const cName  = this.childName;
+            const cGenome = this.childGenome;
+            const poster  = this.username;
+
+            const notifyBirthError = (who) => {
+              // Silently swallow — birth reply failure should not alarm the user
+              console.warn("Birth reply to " + who + " failed (non-fatal).");
+            };
+
+            if (breedMeta.parentA && breedMeta.parentA.author) {
+              publishBirthReply(
+                breedMeta.parentA.author, breedMeta.parentA.permlink,
+                poster, childPermlink, cName, cGenome, art, breedMeta,
+                (r) => { if (!r.success) notifyBirthError(breedMeta.parentA.author); }
+              );
+            }
+            if (breedMeta.parentB && breedMeta.parentB.author) {
+              publishBirthReply(
+                breedMeta.parentB.author, breedMeta.parentB.permlink,
+                poster, childPermlink, cName, cGenome, art, breedMeta,
+                (r) => { if (!r.success) notifyBirthError(breedMeta.parentB.author); }
+              );
+            }
+
             this.$emit("notify", "🧬 " + this.childName + " published to the blockchain!", "success");
             // Reset form
             this.urlA        = "";
