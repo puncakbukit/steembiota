@@ -11,9 +11,6 @@ const { createRouter, createWebHashHistory, useRoute } = VueRouter;
 // STEEMBIOTA GENOME HELPERS (pure functions, no DOM)
 // ============================================================
 
-// Only this account may generate and publish founder creatures.
-const FOUNDER_ACCOUNT = "steembiota";
-
 function randomInt(max) {
   return Math.floor(Math.random() * max);
 }
@@ -681,11 +678,6 @@ const HomeView = {
     },
     lifecycleColor() { return this.lifecycleStage ? this.lifecycleStage.color : "#888"; },
     lifecycleIcon()  { return this.lifecycleStage ? this.lifecycleStage.icon  : "";    },
-    isFounderAccount() {
-      const name = this.username && typeof this.username === "object"
-        ? this.username.value : this.username;
-      return name === FOUNDER_ACCOUNT;
-    },
     totalPages()    { return Math.max(1, Math.ceil(this.allCreatures.length / PAGE_SIZE)); },
     pagedCreatures() {
       const s = (this.listPage - 1) * PAGE_SIZE;
@@ -709,7 +701,7 @@ const HomeView = {
       this.listLoading = false;
     },
     createFounder() {
-      if (!this.isFounderAccount) { this.notify("Only @" + FOUNDER_ACCOUNT + " can create founder creatures.", "error"); return; }
+      if (!this.username) { this.notify("Please log in first.", "error"); return; }
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
       this.facingRight    = Math.random() < 0.5;
@@ -719,7 +711,6 @@ const HomeView = {
     },
     async publishCreature() {
       if (!this.username)         { this.notify("Please log in first.", "error"); return; }
-      if (!this.isFounderAccount) { this.notify("Only @" + FOUNDER_ACCOUNT + " can publish founder creatures.", "error"); return; }
       if (!this.genome)           { this.notify("Create a creature first.", "error"); return; }
       if (!window.steem_keychain) { this.notify("Steem Keychain is not installed.", "error"); return; }
       this.publishing = true;
@@ -740,8 +731,8 @@ const HomeView = {
   template: `
     <div style="margin-top:20px;padding:0 16px;">
 
-      <!-- Founder creation — only visible for @steembiota -->
-      <div v-if="isFounderAccount">
+      <!-- Founder creation — visible to any logged-in user -->
+      <div v-if="username">
         <button @click="createFounder">🌱 Create Founder Creature</button>
 
         <div v-if="creatureName" style="margin:16px 0 6px;">
