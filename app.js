@@ -436,8 +436,18 @@ function unicodeGridSize(pct) {
   return 24; // fossil
 }
 
+// ---- Mirror a single unicode art line (reverses char order) ----
+// Used to flip the creature to face right instead of left.
+function mirrorUnicodeLine(line) {
+  // Split on grapheme boundaries as best we can in plain JS.
+  // We use the spread operator which handles most multi-byte Unicode correctly.
+  return [...line].reverse().join("");
+}
+
 // ---- Main builder ----
-function buildUnicodeArt(genome, age, feedState) {
+// facingRight : boolean — when true the creature faces right (mirrored).
+//               Defaults to false (faces left, same as the original).
+function buildUnicodeArt(genome, age, feedState, facingRight = false) {
   const effectiveLIF = genome.LIF + (feedState ? feedState.lifespanBonus : 0);
   const pct    = Math.min(age / Math.max(effectiveLIF, 1), 1.0);
   const fossil = pct >= 1.0;
@@ -611,7 +621,10 @@ function buildUnicodeArt(genome, age, feedState) {
     ? "✦ " + sigil + sex + " ✦"
     : healthSym + sigil + sex;
 
-  return header + "\n" + lines.join("\n");
+  // ---- Mirror all lines when facingRight ----
+  const bodyLines = facingRight ? lines.map(mirrorUnicodeLine) : lines;
+
+  return header + "\n" + bodyLines.join("\n");
 }
 // ============================================================
 // ROUTE VIEWS
@@ -639,6 +652,7 @@ const HomeView = {
       now:            new Date(),
       feedState:      null,
       customTitle:    "",
+      _facingRight:   false,   // synced from the canvas component's random direction
       // All-creatures list
       allCreatures:  [],
       listLoading:   true,
@@ -679,8 +693,8 @@ const HomeView = {
     }
   },
   watch: {
-    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState); },
-    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs); }
+    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this._facingRight); },
+    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this._facingRight); }
   },
   methods: {
     async loadCreatureList() {
@@ -698,8 +712,9 @@ const HomeView = {
       if (!this.isFounderAccount) { this.notify("Only @" + FOUNDER_ACCOUNT + " can create founder creatures.", "error"); return; }
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
+      this._facingRight   = Math.random() < 0.5;
       this.feedState      = null;
-      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null);
+      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null, this._facingRight);
       this.customTitle    = buildDefaultTitle(generateFullName(this.genome), new Date(this.birthTimestamp));
     },
     async publishCreature() {
@@ -730,7 +745,9 @@ const HomeView = {
           <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
         </div>
 
-        <creature-canvas-component v-if="genome" :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
+        <creature-canvas-component v-if="genome" :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"
+          @facing-resolved="dir => { _facingRight = dir; unicodeArt = buildUnicodeArt(genome, age, feedState, dir); }"
+        ></creature-canvas-component>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;">🦴 Fossilised. Genome preserved on-chain.</div>
 
         <div v-if="genome">
@@ -1062,7 +1079,8 @@ const CreatureView = {
       siblings:      [],     // array of card-ready objects
       children:      [],
       kinshipLoading: false,
-      now:           new Date()
+      now:           new Date(),
+      _facingRight:  false   // synced from the canvas component's random direction
     };
   },
   created() {
@@ -1079,7 +1097,7 @@ const CreatureView = {
       if (!this.genome) return false;
       return (this.postAge ?? 0) >= this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
     },
-    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState) : ""; },
+    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState, this._facingRight) : ""; },
     steemitUrl()       {
       if (!this.author || !this.permlink) return null;
       return "https://steemit.com/@" + this.author + "/" + this.permlink;
@@ -1258,7 +1276,9 @@ const CreatureView = {
         </div>
 
         <!-- Canvas render -->
-        <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
+        <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"
+          @facing-resolved="dir => { _facingRight = dir; }"
+        ></creature-canvas-component>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
           🦴 This creature has fossilised. Its genome is preserved on-chain.
         </div>
@@ -1328,6 +1348,7 @@ const CreatureView = {
         <feeding-panel-component
           :username="username"
           :initial-url="steemitUrl"
+          :unicode-art="unicodeArt"
           @notify="(msg,type) => notify(msg,type)"
           @feed-state-updated="onFeedStateUpdated"
         ></feeding-panel-component>
