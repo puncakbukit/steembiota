@@ -205,7 +205,7 @@ This prevents same-bloodline farming while keeping the check entirely client-sid
 
 ```
 version: "1.0"
-type: "founder" or "offspring"
+type: "offspring"
 genome: { GEN, SX, MOR, APP, ORN, CLR, LIF, FRT_START, FRT_END, MUT }
 name: display name
 age: days at time of publication
@@ -245,18 +245,12 @@ Derived from the post title: lowercased, whitespace becomes hyphens, non-alphanu
 
 | URL | View |
 |---|---|
-| /#/ | Home — founder creation (restricted to @steembiota) + breed and feed panels |
+| /#/ | Home — breed and feed panels |
 | /#/about | About page |
 | /#/@author/permlink | Creature page — canvas render, unicode render, stats, feed panel, breed panel with Parent A pre-filled |
 | /#/@user | User profile page |
 
 The creature page URL is embedded in every published post and feed reply body so Steem readers can visit the live visual rendering directly.
-
----
-
-## Founder Creatures
-
-The ecosystem begins with a small set of founder creatures published exclusively by the @steembiota account. All other creatures must arise through breeding. The Create and Publish buttons are only rendered when the logged-in account is @steembiota. No mention of founders is shown to regular users.
 
 ---
 
