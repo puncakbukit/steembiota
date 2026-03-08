@@ -1,384 +1,285 @@
 # SteemBiota — Immutable Evolution
 
-**SteemBiota** is an experimental decentralized life simulation built on the **Steem blockchain**.
+**SteemBiota** is a decentralised life simulation built on the **Steem blockchain**.
 
-Creatures are generated from deterministic **genomes**, rendered procedurally, and their **entire life history is permanently recorded on-chain**.
+Creatures are generated from deterministic **genomes**, rendered procedurally in two modes, and their entire existence — from birth through breeding to fossilisation — is **permanently recorded on-chain**.
 
-Every creature begins as a **baby**, grows through multiple lifecycle stages, can **reproduce with compatible partners**, be **fed by its owner or the community**, and eventually becomes a **fossil** — but its record remains forever.
-
-The project runs entirely in the browser and uses the Steem blockchain as its **permanent evolutionary database**.
+🌐 **Live app:** https://puncakbukit.github.io/steembiota
 
 ---
 
-# Concept
+## Concept
 
-SteemBiota explores the idea of **digital organisms whose evolution is permanently stored on a blockchain**.
+SteemBiota explores digital organisms whose evolution is permanently stored on a blockchain.
 
-Each creature has:
-
-* a deterministic **genome**
-* a **visual form** rendered procedurally in both Canvas and Unicode
-* a **lifespan measured in real days**
-* a **fertility window**
-* a **health state** shaped by feeding events
-* the ability to **breed with compatible creatures**
-
-Every feeding, breeding, and lifecycle event is posted to Steem as a reply to the creature's root post, forming a **permanent evolutionary record**.
-
-The blockchain effectively becomes the **ecosystem's fossil record**.
+Each creature has a compact genome that determines its body shape, colour, lifespan, and fertility window. Once published via Steem Keychain, the genome is immutable. A creature's lifecycle plays out in real time measured in days, and every interaction — feeding, breeding — is stored as a blockchain reply. The blockchain becomes the ecosystem's permanent fossil record.
 
 ---
 
-# Key Principles
+## Technology Stack
 
-### Immutable Evolution
+The dApp runs entirely in the browser with no build tools and no backend.
 
-All creature data is stored on the **Steem blockchain**. Once published, it cannot be altered. The genome is embedded in every post's `json_metadata` and in a human-readable ` ```genome ``` ` code block, so creatures can be reconstructed from the chain even if the web interface disappears.
+| Layer | Technology |
+|---|---|
+| Blockchain | Steem (via steem-js) |
+| Signing | Steem Keychain browser extension |
+| UI Framework | Vue 3 (CDN) + Vue Router 4 (CDN) |
+| Hosting | GitHub Pages |
+| Build tools | None |
 
----
-
-### Deterministic Rendering
-
-A creature's genome always produces the **same visual form** — the same Canvas drawing, the same Unicode art, the same name. No randomness is involved at render time.
-
----
-
-### Fully Client-Side
-
-The entire dApp runs in the browser with no backend:
-
-* `steem-js` — blockchain API
-* `Steem Keychain` — transaction signing
-* `Vue 3` (CDN) — UI framework
-* `Vue Router 4` (CDN) — client-side routing
-* `GitHub Pages` — hosting
+Files: `index.html`, `blockchain.js`, `components.js`, `app.js`
 
 ---
 
-### Procedural Life
+## Creature Genome
 
-Creature age is derived from **Steem block timestamps**. Time on the blockchain is the clock of the ecosystem.
+Each creature is defined by ten integer genes:
 
----
+| Gene | Description | Range |
+|---|---|---|
+| `GEN` | Genus ID — species barrier | 0–999 |
+| `SX` | Sex (0 = Male, 1 = Female) | 0–1 |
+| `MOR` | Morphology seed — body shape and tail style | 0–9999 |
+| `APP` | Appendage seed — ear shape, paw shape, wing presence | 0–9999 |
+| `ORN` | Ornamentation seed — glow orbs, mane, pattern accent | 0–9999 |
+| `CLR` | Colour hue offset | 0–359 degrees |
+| `LIF` | Lifespan in real days | 80–159 |
+| `FRT_START` | Fertility window start (days) | varies |
+| `FRT_END` | Fertility window end (days) | varies |
+| `MUT` | Mutation tendency — affects offspring variation | 0–5 |
 
-# Creature Genome
-
-Each creature is defined by a compact genome of integers:
-
-```
-GEN       → Genus ID (0–999) — species barrier + color palette family
-SX        → Sex (0 = Male, 1 = Female)
-MOR       → Morphology seed — body shape, tail presence, head size
-APP       → Appendage seed — limb count, horns, fins
-ORN       → Ornament seed — spikes, glow nodes, frills, body pattern
-CLR       → Color hue offset (0–359°)
-LIF       → Base lifespan in days (80–159 for founders)
-FRT_START → Fertility window start (days)
-FRT_END   → Fertility window end (days)
-MUT       → Mutation tendency (0–2 for founders, up to 5 after breeding)
-```
-
-The genome determines body structure, appendages, ornamentation, color family, lifespan, reproductive traits, and mutation probability in offspring.
-
-It is stored inside every creature post in two places for redundancy:
-
-````markdown
-```genome
-{
-  "GEN": 4987,
-  "SX": 1,
-  "MOR": 2834,
-  "APP": 1832,
-  "ORN": 642,
-  "CLR": 197,
-  "LIF": 142,
-  "FRT_START": 20,
-  "FRT_END": 60,
-  "MUT": 2
-}
-```
-````
-
-And inside `json_metadata.steembiota.genome` for fast client-side parsing.
+The genome is stored inside every creature post in a fenced block and in json_metadata, so any client can reconstruct the creature directly from the blockchain.
 
 ---
 
-# Naming System
+## Lifecycle
 
-Every creature receives a **deterministic scientific name** derived solely from its genome — the same genome always produces the same name.
+Creature age is measured in **real days** since the post was published. Lifecycle stage is calculated as a percentage of LIF.
 
-The name has two parts:
+| Stage | Age % | Icon |
+|---|---|---|
+| Baby | 0–4% | Egg |
+| Toddler | 5–11% | Hatching |
+| Child | 12–24% | Seedling |
+| Teenager | 25–39% | Sprout |
+| Young Adult | 40–59% | Blossom |
+| Middle-Aged | 60–79% | Leaf |
+| Elder | 80–99% | Autumn leaf |
+| Fossil | 100%+ | Bone |
 
-**Genus** — generated from `GEN` using three syllable tables:
-
-```
-syllablesA = [Lu, Te, Mo, Va, Zi, Ra, Ko, Ny]
-syllablesB = [mo, ra, vi, to, na, shi, ka, re]
-syllablesC = [ra, nus, tor, lex, via, ron, dus, x]
-```
-
-**Species** — generated from `MOR` and `ORN` using two name tables:
-
-```
-speciesA = [Shavi, Virel, Morun, Zerin, Talin, Korin, Velis, Nora]
-speciesB = [Oua, Tel, Ka, Pol, Zen, Ira, Lux, Tor]
-```
-
-Example: `Lumorlex Shavi Oua`
+Once the lifespan is exceeded the creature becomes a **Fossil**. Its genome and history remain permanently on-chain but it can no longer be fed or used in breeding.
 
 ---
 
-# Lifecycle
+## Visual Rendering
 
-Creature age is measured in **real days** from the Steem post's `created` timestamp.
+Every creature is rendered procedurally from its genome. The same genome always produces the same visual output.
 
-Lifecycle stages are calculated as **percentages of effective lifespan** (base `LIF` + any feeding bonus).
+### Canvas Rendering
 
-| Stage          | Lifespan % | Unicode Grid |
-| -------------- | ---------- | ------------ |
-| 🥚 Baby        | 0–4%       | 6×6          |
-| 🐣 Toddler     | 5–11%      | 10×10        |
-| 🌿 Child       | 12–24%     | 14×14        |
-| 🌱 Teenager    | 25–39%     | 18×18        |
-| 🌸 Young Adult | 40–59%     | 22×22        |
-| 🍃 Middle-Aged | 60–79%     | 26×26        |
-| 🍂 Elder       | 80–99%     | 30×30        |
-| 🦴 Fossil      | 100%+      | 18×18        |
+Used in the web interface. Renders a side-profile quadruped on a 400x320 canvas using the HTML5 Canvas API.
 
-Once the effective lifespan is exceeded the creature becomes a **fossil**. Fossils remain permanently on-chain as part of the ecosystem's history.
+Anatomy is drawn back to front (painter's algorithm): ground shadow, energy ribbons, back legs (dimmed for depth), flowing tail, torso with gradient, chest marking, body pattern, front legs, neck, mane wisps, head with snout and eye, ears, optional dorsal wing, glowing orb nodes along the tail, and fertility aura when in the fertile window.
 
----
+The creature faces left or right at random on each page load via a canvas mirror transform.
 
-# Breeding
+Genome to canvas mapping:
 
-Users provide **two SteemBiota post URLs** as parents. The client loads both posts, extracts their genomes, validates compatibility, and generates a deterministic child genome.
+| Gene | Visual effect |
+|---|---|
+| MOR | Body length, head size, fill density |
+| APP | Leg length, ear height, wing presence |
+| ORN | Glow orb count and hue, chest mark, mane |
+| CLR | Base hue for body gradient |
+| LIF / age | Body scale (grows from 45% at birth to full, shrinks at elder) |
+| SX | Colour saturation variant |
 
-## Compatibility Rules
+### Unicode Rendering
 
-* Both creatures must share the **same GEN** (same genus)
-* Breeding is blocked if GEN values differ — an explicit error is shown
+Used inside Steem post bodies so the creature's form is stored permanently on-chain as plain text.
 
-## Deterministic Child Generation
+Art width grows with lifecycle stage (14 chars at Baby up to 36 chars at Young Adult, back to 30 at Elder, 24 at Fossil).
 
-The child genome is seeded from a hash of both parent genomes, ensuring the same two parents always produce the same child. The seed uses mulberry32 PRNG:
+Row structure (creature faces left, tail extends right):
+- Above body: ear glyphs and optional mane wisps
+- Optional dorsal wing row above the top body row
+- Body rows: head zone (snout, eye, fill), body zone (dense fill with orb accent), tail zone (tapered characters), floating orb nodes
+- Below body: four leg columns with paw characters
 
-```
-seed = hash(parentA.genome values + parentB.genome values)
-rng  = mulberry32(seed)
-```
+Genome to unicode mapping:
 
-Each gene is randomly inherited from one parent, then optionally mutated:
+| Gene | Visual effect |
+|---|---|
+| MOR mod 6 | Body fill palette and tail character style |
+| APP mod 4 | Ear shape and paw shape |
+| APP mod 5 | Dorsal wing presence (rare) |
+| ORN mod 6 | Ornament and orb glyph |
+| ORN mod 3 | Mane presence |
+| ORN continuous | Orb count (1–4) and position |
+| GEN mod 4 | Eye glyph |
+| GEN mod 6 | Header sigil |
 
-```
-child.MOR = pick(parentA.MOR, parentB.MOR)  → maybe mutate ±range
-child.APP = pick(parentA.APP, parentB.APP)  → maybe mutate ±range
-child.ORN = pick(parentA.ORN, parentB.ORN)  → maybe mutate ±range
-child.CLR = pick(parentA.CLR, parentB.CLR)  → maybe mutate ±10
-child.LIF = pick(parentA.LIF, parentB.LIF)  → maybe mutate ±10
-child.MUT = min(5, pick + 20% chance of +1)
-```
-
-## Mutation Probability
-
-```
-mutationChance = 0.01 × (1 + parentA.MUT + parentB.MUT)
-```
-
-Founders have `MUT 0–2`, giving a base mutation chance of 1–3%. High-MUT lineages can reach up to 11%.
-
-## Speciation
-
-There is a **0.5% chance per breeding** that `GEN` mutates to an entirely new random value, producing a new genus. Speciation is flagged in the UI and recorded in `json_metadata`.
-
-## Offspring Publishing
-
-Offspring are published as new root posts (not replies) with `type: "offspring"` in metadata, linking back to both parent posts by author/permlink.
+The header line shows fertile sparkles when the creature is in its fertility window.
 
 ---
 
-# Feeding System
+## Feeding
 
-Feeding represents **care from the owner or the community**. It never modifies the genome — all effects are computed from the blockchain reply history at read time.
+Any logged-in Steem user can feed a creature by loading its post URL. Each feed is published as a blockchain reply.
 
-## How It Works
+### Food Types
 
-A feeding event is a **reply to the creature's post thread** containing structured metadata:
+| Food | Lifespan bonus | Fertility boost |
+|---|---|---|
+| Nectar | +1 day per feed | none |
+| Fruit | +0.5 days per feed | +10% per feed |
+| Crystal | none | +5% per feed |
 
-```
-json_metadata.steembiota.type = "feed"
-json_metadata.steembiota.food = "nectar" | "fruit" | "crystal"
-json_metadata.steembiota.feeder = "@username"
-```
+### Feed Rules
 
-The client scans all replies with `fetchAllReplies`, then `parseFeedEvents` filters and deduplicates them to derive a clean feed count.
+- Each feeder is counted at most once per UTC day (anti-spam).
+- Total feeds are capped at 20 per creature lifetime.
+- Owner feeds count 3x toward the health score; community feeds count 1x.
+- Maximum lifespan bonus: +20% of base LIF.
+- Maximum fertility boost from community feeding: +25%.
 
-## Food Types
+### Health States
 
-| Food    | Lifespan Effect   | Fertility Effect     |
-| ------- | ----------------- | -------------------- |
-| 🍯 Nectar  | +1 day per feed   | none                 |
-| 🍎 Fruit   | +0.5 day per feed | +10% per feed        |
-| 💎 Crystal | none              | +5% per feed         |
-
-## Anti-Spam Rules (enforced client-side at read time)
-
-* **1 feed per feeder per UTC day** — duplicate feeds on the same day are ignored
-* **20 total feeds maximum** — earlier feeds take priority under the cap
-* Earlier-timestamp feeds are processed first; the cap stops counting once reached
-
-## Health Score
-
-Owner feeds count **3×**, community feeds count **1×** toward the weighted health score. This rewards dedicated care while still allowing community support.
-
-```
-weightedScore = (ownerFeeds × 3) + (communityFeeds × 1)
-healthPct     = weightedScore / 60   (max score = 20 owner feeds × 3)
-```
-
-Health levels and their visual symbols:
-
-| Health    | healthPct | Symbol |
-| --------- | --------- | ------ |
-| Thriving  | ≥ 80%     | ✨      |
-| Well-fed  | ≥ 55%     | ✦      |
-| Nourished | ≥ 30%     | •      |
-| Hungry    | > 0%      | ·      |
-| Unfed     | 0%        | ·      |
-
-## Feed Bonuses
-
-* **Lifespan bonus** — +1 day per total feed, capped at 20% of base `LIF`
-* **Fertility boost** — community feeds add +5% each, capped at +25%
-* The effective lifespan (`LIF + lifespanBonus`) is used for all lifecycle and fossil calculations
-
-## Visual Effects
-
-**Canvas renderer** — `healthPct` modulates color saturation (±15) and lightness (±8). Thriving creatures are vivid; unfed ones appear pale and desaturated.
-
-**Unicode renderer** — the body glyph pool changes when a creature is completely unfed (uses a dimmer `░▒·∘◌○` pool). When thriving, the header ornament row gets `✨ orn ✨` flanking. The health symbol prefixes the sigil line whenever any feeds exist.
+| State | Threshold | Symbol |
+|---|---|---|
+| Thriving | 80%+ | sparkle |
+| Well-fed | 55%+ | star |
+| Nourished | 30%+ | dot |
+| Hungry | above 0% | small dot |
+| Unfed | 0% | small dot |
 
 ---
 
-# Visual Rendering
+## Breeding
 
-Creatures are rendered procedurally from their genome in two modes.
+Users pair two compatible creatures by pasting their Steem post URLs. The child genome is generated deterministically and published as a new Steem post.
 
-## Canvas Rendering
+### Compatibility Rules
 
-Used in the web interface. The rendering pipeline:
+All of the following must be true:
 
-1. `buildPhenotype(genome, age, feedState)` — derives all visual parameters: body shape from `MOR`, appendages from `APP`, ornaments from `ORN`, color palette from `GEN % 8`, fertility aura, health modulation from `feedState`
-2. `draw()` — paints tail, limbs, fins, body, pattern, horns, spikes, frills, head, eyes, glow nodes, fertility aura in order
+1. Same GEN (same genus)
+2. Opposite SX (one Male, one Female)
+3. Neither creature is the other's close relative (see Kinship Rules)
 
-Color palette families (cycling on `GEN % 8`):
+### Gene Inheritance
 
-| GEN % 8 | Base Hue | Family        |
-| ------- | -------- | ------------- |
-| 0       | 160°     | Teal/Emerald  |
-| 1       | 200°     | Cyan/Sky      |
-| 2       | 280°     | Violet/Purple |
-| 3       | 30°      | Amber/Gold    |
-| 4       | 340°     | Rose/Crimson  |
-| 5       | 100°     | Lime/Olive    |
-| 6       | 240°     | Blue/Indigo   |
-| 7       | 55°      | Yellow/Ochre  |
+Each gene is inherited from one parent chosen at random (50/50), then potentially mutated. Mutation probability per gene = 1% times (1 + MUT_A + MUT_B). Breeding is deterministic: the same two parents always produce the same child, using a seeded PRNG (mulberry32) keyed on both parent genomes.
 
-Final hue = `(paletteBase + CLR) % 360`.
+### Speciation
 
-## Unicode Rendering
+There is a 0.5% chance per breeding event that the child's GEN mutates to an entirely new value, creating a new genus. Speciated offspring cannot breed with their parents' genus.
 
-Used inside Steem posts so the creature's form is **stored permanently on-chain**. The grid is an ellipse distance-field renderer — body characters fill cells that fall inside the ellipse defined by `MOR`-derived radii.
+### Kinship Rules
 
-The grid grows from 6×6 (baby) to 30×30 (elder), then shrinks to 18×18 for fossils. Appendage glyphs are injected at evenly-spaced body rows; a tail character appears below the body from the Child stage onward.
+SteemBiota walks the blockchain ancestry graph before allowing a breed. A creature cannot breed with:
+
+1. Its own and its partner's parents, grandparents, and all ancestors upward
+2. Its own and its partner's siblings (full or half — any creature sharing at least one parent)
+3. Its own and its partner's children, grandchildren, and all descendants downward
+4. Its own and its partner's parents' siblings (aunts and uncles, full or half)
+5. Its own and its partner's siblings' children, grandchildren, and all descendants downward
+
+**How it works on-chain:**
+
+Each offspring post stores parentA and parentB (author and permlink) in json_metadata.steembiota. At breed time the client:
+
+1. Walks ancestry upward for both creatures via breadth-first search (up to 12 generations).
+2. Collects every author seen and fetches their 100 most recent SteemBiota posts to build a local kinship corpus.
+3. Within that corpus identifies all five categories of relatives for each creature.
+4. Blocks breeding if either creature appears in the other's forbidden set, naming the specific relationship.
+
+This prevents same-bloodline farming while keeping the check entirely client-side and bounded in blockchain API calls.
 
 ---
 
-# Blockchain Structure
+## Blockchain Post Structure
 
-Each creature corresponds to a Steem post thread. All events are replies to the root post:
+### Creature post (json_metadata.steembiota)
 
 ```
-Root Creature Post  (type: "founder" | "offspring")
-      ↓
-Feeding Event       (type: "feed")
-      ↓
-Feeding Event       (type: "feed")
-      ↓
-Breeding Event      (offspring published as a new root post)
-      ↓
-... (fossilises when age ≥ effective lifespan)
+version: "1.0"
+type: "founder" or "offspring"
+genome: { GEN, SX, MOR, APP, ORN, CLR, LIF, FRT_START, FRT_END, MUT }
+name: display name
+age: days at time of publication
+lifecycleStage: stage name
+parentA: { author, permlink }   (offspring only)
+parentB: { author, permlink }   (offspring only)
+mutated: boolean                (offspring only)
+speciated: boolean              (offspring only)
 ```
 
-All `json_metadata` uses the `steembiota/1.0` app identifier and a `steembiota` object with a `version`, `type`, `genome`, and event-specific fields.
-
----
-
-# RPC Node Fallback
-
-The client maintains a list of four Steem API nodes and automatically falls back to the next on error:
+### Feed reply (json_metadata.steembiota)
 
 ```
-https://api.steemit.com
-https://api.justyy.com
-https://steemd.steemworld.org
-https://api.steem.fans
+version: "1.0"
+type: "feed"
+creature: { author, permlink }
+feeder: username
+food: "nectar" | "fruit" | "crystal"
+ts: ISO 8601 UTC timestamp
 ```
 
----
+### Post titles
 
-# User Interface
+Default title format (UTC time, user-editable before publishing):
 
-## Pages
+```
+Vyrex Nymwhisper — born at 7 in the morning UTC on Monday, January 3, 2026
+```
 
-* **Home** — create founder creatures, view canvas + unicode renders, publish to Steem, feed creatures, breed creatures
-* **Profile** (`/@username`) — displays a user's Steem profile: cover image, avatar, display name, bio
-* **About** — describes the project and genome fields
+### Permlinks
 
-## Global Profile Banner
-
-When a user is logged in, a compact banner showing their **cover image, avatar, display name, and @username** is displayed at the top of every page. The profile is fetched once on login and cached for the session.
-
-## Authentication
-
-Login uses `steem_keychain.requestSignBuffer` to verify account ownership without exposing any keys. The verified username is stored in `localStorage`. Without Keychain, the app runs in **read-only mode** — creatures can be viewed but not published or fed.
+Derived from the post title: lowercased, whitespace becomes hyphens, non-alphanumeric stripped, truncated at 200 chars, then a millisecond timestamp appended. Always unique.
 
 ---
 
-# Technology
+## App Routes
 
-SteemBiota is intentionally minimal — no build tools, no bundler, no node_modules.
+| URL | View |
+|---|---|
+| /#/ | Home — founder creation (restricted to @steembiota) + breed and feed panels |
+| /#/about | About page |
+| /#/@author/permlink | Creature page — canvas render, unicode render, stats, feed panel, breed panel with Parent A pre-filled |
+| /#/@user | User profile page |
 
-| Layer      | Technology                    |
-| ---------- | ----------------------------- |
-| UI         | Vue 3 (CDN)                   |
-| Routing    | Vue Router 4 (CDN)            |
-| Blockchain | steem-js (CDN)                |
-| Signing    | Steem Keychain (browser ext)  |
-| Hosting    | GitHub Pages                  |
-
-All logic runs **entirely client-side**. The Steem blockchain functions as the database, history log, and evolutionary archive.
+The creature page URL is embedded in every published post and feed reply body so Steem readers can visit the live visual rendering directly.
 
 ---
 
-# Future Ideas
+## Founder Creatures
 
-* procedural genus color families based on GEN ranges
-* hybridization mechanics between related genera
-* evolutionary statistics and genealogy trees
-* creature extinction tracking
-* ecosystem visualization maps
-* food type phase-2 expansion (crystal mutation effects)
-* lifecycle snapshot posts (on-chain growth record)
-* community stewardship leaderboards
+The ecosystem begins with a small set of founder creatures published exclusively by the @steembiota account. All other creatures must arise through breeding. The Create and Publish buttons are only rendered when the logged-in account is @steembiota. No mention of founders is shown to regular users.
 
 ---
 
-# License
+## Key Principles
+
+**Immutability** — All genomes and life events are stored on-chain and cannot be altered.
+
+**Determinism** — The same genome always renders the same creature. The same two parents always produce the same child.
+
+**UTC time** — All timestamps use UTC to match the Steem blockchain clock.
+
+**Client-side only** — All logic runs in the browser. No servers or external databases.
+
+**Diversity enforcement** — The kinship system prevents same-bloodline farming and encourages cross-community breeding partnerships.
+
+---
+
+## License
 
 Open source. Community experimentation and forks are encouraged.
 
 ---
 
-# Author
+## Author
 
-Created for the **Steem blockchain ecosystem**.
+Created for the Steem blockchain ecosystem by @puncakbukit.
