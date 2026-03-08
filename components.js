@@ -178,7 +178,9 @@ const CreatureCanvasComponent = {
     genome:    { type: Object,  default: null  },
     age:       { type: Number,  default: 0     },
     fossil:    { type: Boolean, default: false },
-    feedState: { type: Object,  default: null  }
+    feedState: { type: Object,  default: null  },
+    canvasW:   { type: Number,  default: 400   },
+    canvasH:   { type: Number,  default: 320   }
   },
   data() {
     // Direction is chosen once at component creation — purely random,
@@ -802,7 +804,57 @@ const CreatureCanvasComponent = {
       ctx.globalAlpha = 1;
     }
   },
-  template: `<canvas ref="canvas" width="400" height="320" style="max-width:100%;"></canvas>`
+  template: `<canvas ref="canvas" :width="canvasW" :height="canvasH" style="max-width:100%;"></canvas>`
+};
+
+// ---- CreatureCardComponent ----
+// Compact card used in paginated creature lists (Home and Profile pages).
+// prop: post — { author, permlink, name, genome, age, lifecycleStage, created }
+const CreatureCardComponent = {
+  name: "CreatureCardComponent",
+  components: { CreatureCanvasComponent },
+  props: { post: { type: Object, required: true } },
+  computed: {
+    fossil()     { return this.post.age >= this.post.genome.LIF; },
+    sexSymbol()  { return this.post.genome.SX === 0 ? "♂" : "♀"; },
+    stageColor() { return this.post.lifecycleStage ? this.post.lifecycleStage.color : "#888"; },
+    stageLabel() {
+      const s = this.post.lifecycleStage;
+      return s ? s.icon + " " + s.name : "";
+    },
+    routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; }
+  },
+  template: `
+    <router-link :to="routePath" style="text-decoration:none;color:inherit;display:block;">
+      <div
+        style="background:#111;border:1px solid #222;border-radius:10px;padding:10px;
+               text-align:center;cursor:pointer;transition:border-color 0.18s;"
+        @mouseenter="$event.currentTarget.style.borderColor='#2e7d32'"
+        @mouseleave="$event.currentTarget.style.borderColor='#222'"
+      >
+        <creature-canvas-component
+          :genome="post.genome"
+          :age="post.age"
+          :fossil="fossil"
+          :canvas-w="180"
+          :canvas-h="144"
+          style="display:block;margin:0 auto;"
+        ></creature-canvas-component>
+        <div style="font-size:0.82rem;font-weight:bold;color:#a5d6a7;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:5px;">
+          🧬 {{ post.name }}
+        </div>
+        <div style="font-size:0.70rem;margin-top:3px;display:flex;gap:5px;justify-content:center;flex-wrap:wrap;">
+          <span style="color:#888;">{{ sexSymbol }}</span>
+          <span style="color:#444;">·</span>
+          <span style="color:#888;">{{ post.age }}d</span>
+          <span style="color:#444;">·</span>
+          <span :style="{ color: stageColor }">{{ stageLabel }}</span>
+        </div>
+        <div style="font-size:0.65rem;color:#3a3a3a;margin-top:2px;">@{{ post.author }}</div>
+      </div>
+    </router-link>
+  `
 };
 
 // ---- GenomeTableComponent ----
