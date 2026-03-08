@@ -118,6 +118,32 @@ async function loadGenomeFromPost(url) {
   return { genome: JSON.parse(match[1].trim()), author, permlink };
 }
 
+// Convert a raw Steem post array into creature card data objects.
+// Filters to valid SteemBiota posts, newest first.
+const PAGE_SIZE = 15;
+function parseSteembiotaPosts(rawPosts) {
+  const results = [];
+  for (const p of rawPosts) {
+    let meta = {};
+    try { meta = JSON.parse(p.json_metadata || "{}"); } catch {}
+    if (!meta.steembiota || !meta.steembiota.genome) continue;
+    const sb = meta.steembiota;
+    results.push({
+      author:        p.author,
+      permlink:      p.permlink,
+      name:          sb.name || p.author,
+      genome:        sb.genome,
+      age:           sb.age ?? 0,
+      lifecycleStage: getLifecycleStage(sb.age ?? 0, sb.genome),
+      parentA:       sb.parentA || null,
+      parentB:       sb.parentB || null,
+      created:       p.created || ""
+    });
+  }
+  results.sort((a, b) => (b.created > a.created ? 1 : -1));
+  return results;
+}
+
 // Breed two genomes into a child genome.
 // Returns { child, mutated, speciated } for display purposes.
 function breedGenomes(a, b) {
@@ -591,12 +617,13 @@ function buildUnicodeArt(genome, age, feedState) {
 // ROUTE VIEWS
 // ============================================================
 
-// ---- HomeView (SteemBiota main) ----
+// ---- HomeView ----
 const HomeView = {
   name: "HomeView",
   inject: ["username", "hasKeychain", "notify"],
   components: {
     CreatureCanvasComponent,
+    CreatureCardComponent,
     GenomeTableComponent,
     LoadingSpinnerComponent,
     BreedingPanelComponent,
@@ -604,284 +631,402 @@ const HomeView = {
   },
   data() {
     return {
+      // Founder creation (steembiota-only)
       genome:         null,
       unicodeArt:     "",
       publishing:     false,
       birthTimestamp: null,
       now:            new Date(),
-      feedState:      null,    // computed from parseFeedEvents + computeFeedState
-      customTitle:    ""       // pre-filled with default; user may edit before publishing
+      feedState:      null,
+      customTitle:    "",
+      // All-creatures list
+      allCreatures:  [],
+      listLoading:   true,
+      listError:     "",
+      listPage:      1
     };
   },
   created() {
-    // Tick every minute so age display stays current
     this._ageTicker = setInterval(() => { this.now = new Date(); }, 60000);
+    this.loadCreatureList();
   },
   beforeUnmount() {
     clearInterval(this._ageTicker);
   },
   computed: {
-    creatureName() {
-      return this.genome ? generateFullName(this.genome) : null;
-    },
-    sexLabel() {
-      return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : "";
-    },
+    creatureName()   { return this.genome ? generateFullName(this.genome) : null; },
+    sexLabel()       { return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : ""; },
     age() {
       if (!this.birthTimestamp) return 0;
-      const diffSec = (this.now - new Date(this.birthTimestamp)) / 1000;
-      return Math.max(0, Math.floor(diffSec / 86400));
+      return Math.max(0, Math.floor((this.now - new Date(this.birthTimestamp)) / 86400000));
     },
-    lifecycleStage() {
-      return this.genome ? getLifecycleStage(this.age, this.genome) : null;
-    },
+    lifecycleStage() { return this.genome ? getLifecycleStage(this.age, this.genome) : null; },
     fossil() {
       if (!this.genome) return false;
-      const effectiveLIF = this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
-      return this.age >= effectiveLIF;
+      return this.age >= this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
     },
-    lifecycleColor() {
-      return this.lifecycleStage ? this.lifecycleStage.color : "#888";
-    },
-    lifecycleIcon() {
-      return this.lifecycleStage ? this.lifecycleStage.icon : "";
-    },
+    lifecycleColor() { return this.lifecycleStage ? this.lifecycleStage.color : "#888"; },
+    lifecycleIcon()  { return this.lifecycleStage ? this.lifecycleStage.icon  : "";    },
     isFounderAccount() {
-      // username is injected as a Vue ref from the root App.
-      // Unwrap .value if it's a ref, fall back to the value itself otherwise.
       const name = this.username && typeof this.username === "object"
-        ? this.username.value
-        : this.username;
+        ? this.username.value : this.username;
       return name === FOUNDER_ACCOUNT;
+    },
+    totalPages()    { return Math.max(1, Math.ceil(this.allCreatures.length / PAGE_SIZE)); },
+    pagedCreatures() {
+      const s = (this.listPage - 1) * PAGE_SIZE;
+      return this.allCreatures.slice(s, s + PAGE_SIZE);
     }
   },
   watch: {
-    age(newAge) {
-      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, newAge, this.feedState);
-    },
-    feedState(fs) {
-      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs);
-    }
+    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState); },
+    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs); }
   },
   methods: {
-    createFounder() {
-      if (!this.isFounderAccount) {
-        this.notify("Only @" + FOUNDER_ACCOUNT + " can create founder creatures.", "error");
-        return;
+    async loadCreatureList() {
+      this.listLoading = true;
+      this.listError   = "";
+      try {
+        const raw = await fetchPostsByTag("steembiota", 100);
+        this.allCreatures = parseSteembiotaPosts(Array.isArray(raw) ? raw : []);
+      } catch (e) {
+        this.listError = e.message || "Failed to load creatures.";
       }
+      this.listLoading = false;
+    },
+    createFounder() {
+      if (!this.isFounderAccount) { this.notify("Only @" + FOUNDER_ACCOUNT + " can create founder creatures.", "error"); return; }
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
       this.feedState      = null;
       this.unicodeArt     = buildUnicodeArt(this.genome, 0, null);
       this.customTitle    = buildDefaultTitle(generateFullName(this.genome), new Date(this.birthTimestamp));
     },
-
     async publishCreature() {
-      if (!this.username) {
-        this.notify("Please log in first.", "error");
-        return;
-      }
-      if (!this.isFounderAccount) {
-        this.notify("Only @" + FOUNDER_ACCOUNT + " can publish founder creatures.", "error");
-        return;
-      }
-      if (!this.genome) {
-        this.notify("Create a creature first.", "error");
-        return;
-      }
-      if (!window.steem_keychain) {
-        this.notify("Steem Keychain is not installed.", "error");
-        return;
-      }
-
+      if (!this.username)         { this.notify("Please log in first.", "error"); return; }
+      if (!this.isFounderAccount) { this.notify("Only @" + FOUNDER_ACCOUNT + " can publish founder creatures.", "error"); return; }
+      if (!this.genome)           { this.notify("Create a creature first.", "error"); return; }
+      if (!window.steem_keychain) { this.notify("Steem Keychain is not installed.", "error"); return; }
       this.publishing = true;
       publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, this.customTitle, (response) => {
         this.publishing = false;
-        if (response.success) {
-          this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
-        } else {
-          this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
-        }
+        if (response.success) this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
+        else                  this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
       });
-    }
+    },
+    prevPage() { if (this.listPage > 1) this.listPage--; },
+    nextPage() { if (this.listPage < this.totalPages) this.listPage++; }
   },
 
   template: `
     <div style="margin-top:20px;padding:0 16px;">
 
-      <!-- Create button — restricted to @steembiota -->
+      <!-- Founder creation — only visible for @steembiota -->
       <div v-if="isFounderAccount">
         <button @click="createFounder">🌱 Create Founder Creature</button>
-      </div>
-      <div v-else></div>
 
-      <!-- Identity header -->
-      <div v-if="creatureName" style="margin:16px 0 6px;">
-        <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
-          🧬 {{ creatureName }}
-        </div>
-        <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
-
-        <!-- Age + lifecycle + health badges -->
-        <div style="margin-top:8px;display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
-          <span style="font-size:0.85rem;color:#aaa;">
-            Age: <strong style="color:#eee;">{{ age }} day{{ age === 1 ? '' : 's' }}</strong>
-          </span>
-          <span :style="{ fontSize: '0.82rem', fontWeight: 'bold', color: lifecycleColor, border: '1px solid ' + lifecycleColor, borderRadius: '12px', padding: '2px 10px' }">
-            {{ lifecycleIcon }} {{ lifecycleStage.name }}
-          </span>
-          <span style="font-size:0.8rem;color:#666;">
-            Lifespan: {{ genome.LIF + (feedState ? feedState.lifespanBonus : 0) }} days
-            <template v-if="feedState && feedState.lifespanBonus > 0">
-              <span style="color:#66bb6a;">(+{{ feedState.lifespanBonus }}🍃)</span>
-            </template>
-            &nbsp;·&nbsp;
-            Fertile: {{ genome.FRT_START }}–{{ genome.FRT_END }}
-          </span>
-          <!-- Health badge — only shown when feedState is known -->
-          <span
-            v-if="feedState"
-            :style="{
-              fontSize: '0.80rem', fontWeight: 'bold',
-              color: feedState.healthPct >= 0.55 ? '#a5d6a7' : feedState.healthPct >= 0.30 ? '#ffb74d' : '#888',
-              border: '1px solid ' + (feedState.healthPct >= 0.55 ? '#388e3c' : feedState.healthPct >= 0.30 ? '#f57c00' : '#444'),
-              borderRadius: '12px', padding: '2px 10px'
-            }"
-          >{{ feedState.symbol }} {{ feedState.label }}</span>
-        </div>
-      </div>
-
-      <!-- Canvas, genome, and publish — only meaningful for @steembiota (founder creator) -->
-      <template v-if="isFounderAccount">
-
-        <!-- Canvas render — age + feedState drive full lifecycle visual evolution -->
-        <creature-canvas-component :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
-
-        <!-- Fossil overlay label -->
-        <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
-          🦴 This creature has fossilised. Its genome is preserved on-chain.
+        <div v-if="creatureName" style="margin:16px 0 6px;">
+          <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;">🧬 {{ creatureName }}</div>
+          <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
         </div>
 
-        <!-- Genome table -->
+        <creature-canvas-component v-if="genome" :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
+        <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;">🦴 Fossilised. Genome preserved on-chain.</div>
+
         <div v-if="genome">
           <h3 style="color:#a5d6a7;margin:16px 0 4px;">Genome</h3>
           <genome-table-component :genome="genome"></genome-table-component>
-
-          <!-- Unicode art -->
           <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
-          <pre :style="fossil ? { color: '#444', opacity: '0.6' } : {}">{{ unicodeArt }}</pre>
-
-          <!-- Post title — pre-filled, user-editable -->
+          <pre :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
           <div style="margin-top:16px;max-width:520px;margin-left:auto;margin-right:auto;">
             <label style="display:block;font-size:12px;color:#888;margin-bottom:4px;">Post title</label>
-            <input
-              v-model="customTitle"
-              type="text"
-              maxlength="255"
-              style="width:100%;font-size:13px;"
-            />
+            <input v-model="customTitle" type="text" maxlength="255" style="width:100%;font-size:13px;"/>
           </div>
-
-          <!-- Publish button -->
           <br/>
-          <button
-            @click="publishCreature"
-            :disabled="publishing || !username"
-            style="background:#1565c0;"
-          >
+          <button @click="publishCreature" :disabled="publishing||!username" style="background:#1565c0;">
             {{ publishing ? "Publishing…" : "📡 Publish to Steem" }}
           </button>
-          <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">
-            Log in to publish your creature.
-          </p>
+          <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">Log in to publish.</p>
         </div>
+        <hr/>
+      </div>
 
-        <p v-else style="color:#666;margin-top:24px;">
-          Press <strong>Create Founder Creature</strong> to generate your first organism.
-        </p>
-
-      </template>
-
-      <!-- Feeding panel -->
+      <!-- Feed + Breed panels -->
       <feeding-panel-component
         :username="username"
         @notify="(msg,type) => notify(msg,type)"
         @feed-state-updated="(fs) => { feedState = fs }"
       ></feeding-panel-component>
-
-      <!-- Breeding panel -->
       <breeding-panel-component
         :username="username"
         @notify="(msg,type) => notify(msg,type)"
       ></breeding-panel-component>
+
+      <hr/>
+
+      <!-- ── All Creatures ── -->
+      <h3 style="color:#a5d6a7;margin:18px 0 12px;font-size:1rem;letter-spacing:0.04em;">
+        🌿 All Creatures
+        <span v-if="!listLoading && !listError" style="font-size:0.75rem;color:#555;font-weight:normal;margin-left:8px;">
+          ({{ allCreatures.length }} total)
+        </span>
+      </h3>
+
+      <loading-spinner-component v-if="listLoading"></loading-spinner-component>
+      <div v-else-if="listError" style="color:#ff8a80;font-size:13px;">⚠ {{ listError }}</div>
+      <div v-else-if="allCreatures.length === 0" style="color:#555;font-size:13px;">No creatures published yet.</div>
+
+      <template v-else>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
+          <creature-card-component
+            v-for="c in pagedCreatures"
+            :key="c.author + '/' + c.permlink"
+            :post="c"
+          ></creature-card-component>
+        </div>
+
+        <div v-if="totalPages > 1" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:14px;">
+          <button @click="prevPage" :disabled="listPage === 1" style="padding:5px 14px;background:#1a2a1a;">◀ Prev</button>
+          <span style="font-size:13px;color:#555;">{{ listPage }} / {{ totalPages }}</span>
+          <button @click="nextPage" :disabled="listPage === totalPages" style="padding:5px 14px;background:#1a2a1a;">Next ▶</button>
+        </div>
+      </template>
 
     </div>
   `
 };
 
 // ---- AboutView ----
+// Fetches README.md from the GitHub repo and renders it as styled HTML.
 const AboutView = {
   name: "AboutView",
+  components: { LoadingSpinnerComponent },
+  data() { return { html: "", loading: true, loadError: "" }; },
+  async created() {
+    try {
+      const res = await fetch(
+        "https://raw.githubusercontent.com/puncakbukit/steembiota/main/README.md"
+      );
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      this.html = this.mdToHtml(await res.text());
+    } catch (e) {
+      this.loadError = e.message || "Could not load documentation.";
+    }
+    this.loading = false;
+  },
+  methods: {
+    // Minimal Markdown → HTML (no library needed).
+    // Handles: h1/h2/h3, bold, italic, inline code, fenced code blocks,
+    // links, unordered lists, ordered lists, tables, hr, paragraphs.
+    mdToHtml(md) {
+      const esc    = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      const inline = s => s
+        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+        .replace(/`([^`]+)`/g, "<code style='background:#0a0a0a;padding:1px 5px;border-radius:3px;font-size:0.88em;color:#80deea;'>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong style='color:#eee;'>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener" style="color:#80deea;">$1</a>');
+
+      const lines   = md.split("\n");
+      const out     = [];
+      let inCode    = false, codeBuf = [];
+      let inList    = false, listOl  = false, listBuf = [];
+      let inTable   = false, tRows   = [];
+
+      const flushList = () => {
+        if (!inList) return;
+        const tag = listOl ? "ol" : "ul";
+        out.push(`<${tag} style="text-align:left;color:#aaa;padding-left:22px;margin:6px 0;">`);
+        listBuf.forEach(li => out.push(`<li style="margin:2px 0;">${inline(li)}</li>`));
+        out.push(`</${tag}>`);
+        inList = false; listBuf = [];
+      };
+
+      const flushTable = () => {
+        if (!inTable) return;
+        out.push('<div style="overflow-x:auto;margin:10px 0;"><table style="border-collapse:collapse;font-size:13px;color:#ccc;text-align:left;min-width:320px;">');
+        tRows.forEach((cells, ri) => {
+          out.push("<tr>");
+          cells.forEach(cell => {
+            const tag = ri === 0 ? "th" : "td";
+            const sty = ri === 0
+              ? "padding:5px 14px;border-bottom:1px solid #2e7d32;color:#a5d6a7;font-weight:bold;white-space:nowrap;"
+              : "padding:4px 14px;border-bottom:1px solid #1e1e1e;";
+            out.push(`<${tag} style="${sty}">${inline(cell.trim())}</${tag}>`);
+          });
+          out.push("</tr>");
+        });
+        out.push("</table></div>");
+        inTable = false; tRows = [];
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+
+        // Fenced code block
+        if (raw.startsWith("```")) {
+          if (!inCode) {
+            flushList(); flushTable();
+            inCode = true; codeBuf = [];
+          } else {
+            out.push(`<pre style="background:#0a0a0a;border:1px solid #1e2e1e;border-radius:6px;
+              padding:12px 16px;text-align:left;font-size:12px;overflow-x:auto;
+              margin:8px 0;color:#a5d6a7;line-height:1.5;"><code>${esc(codeBuf.join("\n"))}</code></pre>`);
+            inCode = false;
+          }
+          continue;
+        }
+        if (inCode) { codeBuf.push(raw); continue; }
+
+        // Table row
+        if (raw.includes("|") && raw.trim().startsWith("|")) {
+          flushList();
+          const cells = raw.trim().replace(/^\||\|$/g,"").split("|");
+          // Skip separator rows like |---|---|
+          if (cells.every(c => /^[-: ]+$/.test(c.trim()))) continue;
+          if (!inTable) inTable = true;
+          tRows.push(cells);
+          continue;
+        }
+        if (inTable) flushTable();
+
+        // Headings
+        if (/^### /.test(raw)) {
+          flushList();
+          out.push(`<h3 style="color:#66bb6a;margin:14px 0 4px;font-size:0.97rem;">${inline(raw.slice(4))}</h3>`);
+          continue;
+        }
+        if (/^## /.test(raw)) {
+          flushList();
+          out.push(`<h2 style="color:#80deea;margin:20px 0 5px;font-size:1.1rem;border-bottom:1px solid #1a2a1a;padding-bottom:4px;">${inline(raw.slice(3))}</h2>`);
+          continue;
+        }
+        if (/^# /.test(raw)) {
+          flushList();
+          out.push(`<h1 style="color:#a5d6a7;margin:0 0 8px;font-size:1.4rem;">${inline(raw.slice(2))}</h1>`);
+          continue;
+        }
+
+        // Horizontal rule
+        if (/^---+$/.test(raw.trim())) {
+          flushList();
+          out.push('<hr style="border:none;border-top:1px solid #1e2e1e;margin:16px 0;">');
+          continue;
+        }
+
+        // Unordered list
+        const ulM = raw.match(/^[-*+] (.+)/);
+        if (ulM) {
+          if (!inList || listOl)  { flushList(); inList = true; listOl = false; }
+          listBuf.push(ulM[1]);
+          continue;
+        }
+
+        // Ordered list
+        const olM = raw.match(/^\d+\. (.+)/);
+        if (olM) {
+          if (!inList || !listOl) { flushList(); inList = true; listOl = true; }
+          listBuf.push(olM[1]);
+          continue;
+        }
+
+        flushList();
+
+        // Blank line → spacing
+        if (raw.trim() === "") { out.push('<div style="height:6px;"></div>'); continue; }
+
+        // Paragraph
+        out.push(`<p style="color:#ccc;margin:4px 0;line-height:1.75;">${inline(raw)}</p>`);
+      }
+
+      flushList(); flushTable();
+      return out.join("\n");
+    }
+  },
   template: `
-    <div style="margin:30px auto;max-width:600px;padding:0 16px;text-align:left;color:#ccc;line-height:1.7;">
-      <h2 style="color:#a5d6a7;">🌿 About SteemBiota</h2>
-      <p>
-        <strong style="color:#eee;">SteemBiota — Immutable Evolution</strong> is an on-chain
-        creature generator built on the Steem blockchain.
-      </p>
-      <p>
-        Each creature is defined by a randomly generated <em>genome</em> — a compact set of
-        integers that determine its appearance, lifespan, and fertility window.
-        Once published via Steem Keychain, the genome is stored immutably on the blockchain
-        forever.
-      </p>
-      <h3 style="color:#66bb6a;">Genome fields</h3>
-      <ul style="color:#aaa;">
-        <li><strong style="color:#eee;">GEN</strong> — generation index (0–999)</li>
-        <li><strong style="color:#eee;">SX</strong> — sex (0 male / 1 female)</li>
-        <li><strong style="color:#eee;">MOR</strong> — morphology (body shape variance)</li>
-        <li><strong style="color:#eee;">APP</strong> — appearance</li>
-        <li><strong style="color:#eee;">ORN</strong> — ornamentation</li>
-        <li><strong style="color:#eee;">CLR</strong> — colour hue (0–359°)</li>
-        <li><strong style="color:#eee;">LIF</strong> — lifespan (80–159)</li>
-        <li><strong style="color:#eee;">FRT_START / FRT_END</strong> — fertility window</li>
-        <li><strong style="color:#eee;">MUT</strong> — mutation tendency (0–5); affects offspring variation</li>
-      </ul>
-      <h3 style="color:#66bb6a;">Tech stack</h3>
-      <p>
-        Built with <strong style="color:#eee;">steem-js</strong>,
-        <strong style="color:#eee;">Steem Keychain</strong>,
-        <strong style="color:#eee;">Vue 3 CDN</strong>, and
-        <strong style="color:#eee;">Vue Router 4</strong>.
-        No build tools required.
-      </p>
+    <div style="margin:20px auto;max-width:720px;padding:0 20px 40px;text-align:left;">
+      <loading-spinner-component v-if="loading"></loading-spinner-component>
+      <div v-else-if="loadError" style="color:#ff8a80;margin-top:24px;">
+        ⚠ {{ loadError }}
+      </div>
+      <div v-else v-html="html"></div>
     </div>
   `
 };
 
 // ---- ProfileView ----
+// Shows a user's bred creatures with paginated cards.
+// Profile/cover images are already shown globally — not repeated here.
 const ProfileView = {
   name: "ProfileView",
   inject: ["notify"],
-  components: { UserProfileComponent, LoadingSpinnerComponent },
-  data() { return { profileData: null, loading: true }; },
+  components: { CreatureCardComponent, LoadingSpinnerComponent },
+  data() {
+    return {
+      creatures:  [],
+      loading:    true,
+      loadError:  "",
+      listPage:   1
+    };
+  },
   async created() {
     const user = this.$route.params.user;
     this.loading = true;
     try {
-      this.profileData = await fetchAccount(user);
-    } catch {
+      const raw = await fetchPostsByUser(user, 100);
+      this.creatures = parseSteembiotaPosts(Array.isArray(raw) ? raw : []);
+    } catch (e) {
+      this.loadError = e.message || "Failed to load creatures.";
       this.notify("Failed to load profile.", "error");
     }
     this.loading = false;
   },
+  computed: {
+    username()   { return this.$route.params.user; },
+    totalPages() { return Math.max(1, Math.ceil(this.creatures.length / PAGE_SIZE)); },
+    pagedCreatures() {
+      const s = (this.listPage - 1) * PAGE_SIZE;
+      return this.creatures.slice(s, s + PAGE_SIZE);
+    }
+  },
+  methods: {
+    prevPage() { if (this.listPage > 1) this.listPage--; },
+    nextPage() { if (this.listPage < this.totalPages) this.listPage++; }
+  },
   template: `
-    <div style="margin-top:20px;">
+    <div style="margin-top:20px;padding:0 16px;">
+
+      <!-- User heading -->
+      <h2 style="color:#a5d6a7;margin:0 0 4px;">@{{ username }}</h2>
+      <p style="color:#555;font-size:13px;margin:0 0 16px;">
+        Creatures bred by this user
+      </p>
+
       <loading-spinner-component v-if="loading"></loading-spinner-component>
-      <div v-else-if="!profileData" style="color:#888;">
-        <p>User @{{ $route.params.user }} not found.</p>
+      <div v-else-if="loadError" style="color:#ff8a80;font-size:13px;">⚠ {{ loadError }}</div>
+      <div v-else-if="creatures.length === 0" style="color:#555;font-size:13px;">
+        No SteemBiota creatures found for @{{ username }}.
       </div>
-      <user-profile-component v-else :profile-data="profileData"></user-profile-component>
+
+      <template v-else>
+        <p style="font-size:12px;color:#444;margin:0 0 12px;">{{ creatures.length }} creature{{ creatures.length === 1 ? '' : 's' }}</p>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
+          <creature-card-component
+            v-for="c in pagedCreatures"
+            :key="c.author + '/' + c.permlink"
+            :post="c"
+          ></creature-card-component>
+        </div>
+
+        <div v-if="totalPages > 1" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:14px;">
+          <button @click="prevPage" :disabled="listPage === 1" style="padding:5px 14px;background:#1a2a1a;">◀ Prev</button>
+          <span style="font-size:13px;color:#555;">{{ listPage }} / {{ totalPages }}</span>
+          <button @click="nextPage" :disabled="listPage === totalPages" style="padding:5px 14px;background:#1a2a1a;">Next ▶</button>
+        </div>
+      </template>
+
     </div>
   `
 };
@@ -889,12 +1034,14 @@ const ProfileView = {
 // ---- CreatureView ----
 // Route: /@:author/:permlink
 // Loads a published SteemBiota post, renders the creature,
+// shows a kinship panel (parents, siblings, children),
 // and provides Feed + Breed interaction panels.
 const CreatureView = {
   name: "CreatureView",
   inject: ["username", "notify"],
   components: {
     CreatureCanvasComponent,
+    CreatureCardComponent,
     GenomeTableComponent,
     LoadingSpinnerComponent,
     FeedingPanelComponent,
@@ -902,15 +1049,20 @@ const CreatureView = {
   },
   data() {
     return {
-      loading:    true,
-      loadError:  null,
-      genome:     null,
-      name:       null,
-      author:     null,
-      permlink:   null,
-      postAge:    null,   // days since creation stored in json_metadata
-      feedState:  null,
-      now:        new Date()
+      loading:       true,
+      loadError:     null,
+      genome:        null,
+      name:          null,
+      author:        null,
+      permlink:      null,
+      postAge:       null,
+      feedState:     null,
+      parentA:       null,   // { name, author, permlink, genome, age, lifecycleStage } | null
+      parentB:       null,
+      siblings:      [],     // array of card-ready objects
+      children:      [],
+      kinshipLoading: false,
+      now:           new Date()
     };
   },
   created() {
@@ -921,27 +1073,20 @@ const CreatureView = {
     clearInterval(this._ticker);
   },
   computed: {
-    sexLabel() {
-      return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : "";
-    },
-    lifecycleStage() {
-      return this.genome ? getLifecycleStage(this.postAge ?? 0, this.genome) : null;
-    },
+    sexLabel()      { return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : ""; },
+    lifecycleStage(){ return this.genome ? getLifecycleStage(this.postAge ?? 0, this.genome) : null; },
     fossil() {
       if (!this.genome) return false;
-      const effectiveLIF = this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
-      return (this.postAge ?? 0) >= effectiveLIF;
+      return (this.postAge ?? 0) >= this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
     },
-    unicodeArt() {
-      return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState) : "";
-    },
-    steemitUrl() {
+    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState) : ""; },
+    steemitUrl()       {
       if (!this.author || !this.permlink) return null;
-      return `https://steemit.com/@${this.author}/${this.permlink}`;
+      return "https://steemit.com/@" + this.author + "/" + this.permlink;
     },
     breedPrefilledUrl() {
       if (!this.author || !this.permlink) return null;
-      return `https://steemit.com/@${this.author}/${this.permlink}`;
+      return "https://steemit.com/@" + this.author + "/" + this.permlink;
     }
   },
   methods: {
@@ -959,22 +1104,114 @@ const CreatureView = {
         try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
         if (!meta.steembiota) throw new Error("This post is not a SteemBiota creature.");
 
-        this.genome  = meta.steembiota.genome;
-        this.name    = meta.steembiota.name || author;
-        this.postAge = meta.steembiota.age ?? 0;
+        const sb       = meta.steembiota;
+        this.genome    = sb.genome;
+        this.name      = sb.name || author;
+        this.postAge   = sb.age ?? 0;
 
-        // Load feed events and compute health state
-        const replies        = await fetchAllReplies(author, permlink);
-        const feedEvents     = parseFeedEvents(replies, author);
-        this.feedState       = computeFeedState(feedEvents, this.genome);
+        // Load feed events
+        const replies    = await fetchAllReplies(author, permlink);
+        const feedEvents = parseFeedEvents(replies, author);
+        this.feedState   = computeFeedState(feedEvents, this.genome);
+
+        // Store parent refs from metadata (no extra fetch needed for display)
+        this._rawParentA = sb.parentA || null;
+        this._rawParentB = sb.parentB || null;
+
       } catch (err) {
         this.loadError = err.message || "Failed to load creature.";
       }
       this.loading = false;
+
+      // Load kinship in background after main render
+      if (!this.loadError) this.loadKinship();
     },
-    onFeedStateUpdated(fs) {
-      this.feedState = fs;
-    }
+
+    async loadKinship() {
+      this.kinshipLoading = true;
+      const selfKey = nodeKey(this.author, this.permlink);
+      try {
+        // --- Parents: fetch individually (cheap, known keys) ---
+        const loadParent = async (ref) => {
+          if (!ref || !ref.author || !ref.permlink) return null;
+          try {
+            const node = await fetchSteembiotaPost(ref.author, ref.permlink);
+            if (!node) return null;
+            return {
+              author:        node.author,
+              permlink:      node.permlink,
+              name:          node.meta.name || node.author,
+              genome:        node.meta.genome,
+              age:           node.meta.age ?? 0,
+              lifecycleStage: getLifecycleStage(node.meta.age ?? 0, node.meta.genome),
+              created:       ""
+            };
+          } catch { return null; }
+        };
+        const [pA, pB] = await Promise.all([
+          loadParent(this._rawParentA),
+          loadParent(this._rawParentB)
+        ]);
+        this.parentA = pA;
+        this.parentB = pB;
+
+        // --- Siblings + Children: build a small corpus from this author + parent authors ---
+        const authorsToFetch = new Set([this.author]);
+        if (this._rawParentA?.author) authorsToFetch.add(this._rawParentA.author);
+        if (this._rawParentB?.author) authorsToFetch.add(this._rawParentB.author);
+
+        const corpus = await fetchCorpusByAuthors(authorsToFetch);
+        // Seed corpus with the creature itself
+        corpus.set(selfKey, {
+          key: selfKey, author: this.author, permlink: this.permlink,
+          meta: { genome: this.genome, name: this.name, age: this.postAge,
+                  parentA: this._rawParentA, parentB: this._rawParentB }
+        });
+
+        // Siblings
+        const siblingKeys = findSiblings(new Set([selfKey]), corpus);
+        this.siblings = [...siblingKeys]
+          .filter(k => k !== selfKey)
+          .slice(0, 10)
+          .map(k => {
+            const n = corpus.get(k);
+            if (!n) return null;
+            return {
+              author: n.author, permlink: n.permlink,
+              name:   n.meta.name || n.author,
+              genome: n.meta.genome, age: n.meta.age ?? 0,
+              lifecycleStage: getLifecycleStage(n.meta.age ?? 0, n.meta.genome),
+              created: ""
+            };
+          }).filter(Boolean);
+
+        // Children (direct only)
+        const childKeys = findDescendants(new Set([selfKey]), corpus);
+        this.children = [...childKeys]
+          .slice(0, 10)
+          .map(k => {
+            const n = corpus.get(k);
+            if (!n) return null;
+            // Only include direct children (parentA or parentB is selfKey)
+            const pA = n.meta.parentA;
+            const pB = n.meta.parentB;
+            const paKey = pA?.author ? nodeKey(pA.author, pA.permlink) : null;
+            const pbKey = pB?.author ? nodeKey(pB.author, pB.permlink) : null;
+            if (paKey !== selfKey && pbKey !== selfKey) return null;
+            return {
+              author: n.author, permlink: n.permlink,
+              name:   n.meta.name || n.author,
+              genome: n.meta.genome, age: n.meta.age ?? 0,
+              lifecycleStage: getLifecycleStage(n.meta.age ?? 0, n.meta.genome),
+              created: ""
+            };
+          }).filter(Boolean);
+
+      } catch { /* kinship is best-effort */ }
+      this.kinshipLoading = false;
+    },
+
+    onFeedStateUpdated(fs) { this.feedState = fs; }
   },
 
   template: `
@@ -992,18 +1229,13 @@ const CreatureView = {
 
         <!-- Identity header -->
         <div style="margin-bottom:12px;">
-          <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">
-            🧬 {{ name }}
-          </div>
+          <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">🧬 {{ name }}</div>
           <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
-
-          <!-- Badges row -->
           <div style="margin-top:8px;display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
             <span style="font-size:0.85rem;color:#aaa;">
               Age: <strong style="color:#eee;">{{ postAge }} day{{ postAge === 1 ? '' : 's' }}</strong>
             </span>
-            <span
-              v-if="lifecycleStage"
+            <span v-if="lifecycleStage"
               :style="{ fontSize:'0.82rem', fontWeight:'bold', color:lifecycleStage.color,
                         border:'1px solid '+lifecycleStage.color, borderRadius:'12px', padding:'2px 10px' }"
             >{{ lifecycleStage.icon }} {{ lifecycleStage.name }}</span>
@@ -1014,8 +1246,7 @@ const CreatureView = {
               </template>
               &nbsp;·&nbsp; Fertile: {{ genome.FRT_START }}–{{ genome.FRT_END }}
             </span>
-            <span
-              v-if="feedState"
+            <span v-if="feedState"
               :style="{
                 fontSize:'0.80rem', fontWeight:'bold',
                 color: feedState.healthPct >= 0.55 ? '#a5d6a7' : feedState.healthPct >= 0.30 ? '#ffb74d' : '#888',
@@ -1027,13 +1258,7 @@ const CreatureView = {
         </div>
 
         <!-- Canvas render -->
-        <creature-canvas-component
-          :genome="genome"
-          :age="postAge"
-          :fossil="fossil"
-          :feed-state="feedState"
-        ></creature-canvas-component>
-
+        <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"></creature-canvas-component>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
           🦴 This creature has fossilised. Its genome is preserved on-chain.
         </div>
@@ -1055,7 +1280,51 @@ const CreatureView = {
 
         <hr/>
 
-        <!-- Feed panel — pre-loaded with this creature's URL -->
+        <!-- ── Kinship Panel ── -->
+        <div style="margin:8px 0 20px;">
+          <h3 style="color:#a5d6a7;margin:0 0 12px;font-size:1rem;">🌿 Family</h3>
+
+          <div v-if="kinshipLoading" style="color:#555;font-size:13px;margin:8px 0;">
+            ⏳ Loading kinship…
+          </div>
+          <template v-else>
+
+            <!-- Parents -->
+            <template v-if="parentA || parentB">
+              <div style="font-size:0.78rem;color:#66bb6a;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Parents</div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px;max-width:500px;">
+                <creature-card-component v-if="parentA" :post="parentA"></creature-card-component>
+                <creature-card-component v-if="parentB" :post="parentB"></creature-card-component>
+              </div>
+            </template>
+            <div v-else style="font-size:12px;color:#333;margin-bottom:8px;">No parent data (origin creature)</div>
+
+            <!-- Children -->
+            <template v-if="children.length > 0">
+              <div style="font-size:0.78rem;color:#66bb6a;text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px;">
+                Children ({{ children.length }})
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px;max-width:920px;">
+                <creature-card-component v-for="c in children" :key="c.author+'/'+c.permlink" :post="c"></creature-card-component>
+              </div>
+            </template>
+
+            <!-- Siblings -->
+            <template v-if="siblings.length > 0">
+              <div style="font-size:0.78rem;color:#66bb6a;text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px;">
+                Siblings ({{ siblings.length }})
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px;max-width:920px;">
+                <creature-card-component v-for="s in siblings" :key="s.author+'/'+s.permlink" :post="s"></creature-card-component>
+              </div>
+            </template>
+
+          </template>
+        </div>
+
+        <hr/>
+
+        <!-- Feed panel -->
         <feeding-panel-component
           :username="username"
           :initial-url="steemitUrl"
@@ -1063,7 +1332,7 @@ const CreatureView = {
           @feed-state-updated="onFeedStateUpdated"
         ></feeding-panel-component>
 
-        <!-- Breed panel — Parent A pre-filled with this creature -->
+        <!-- Breed panel — Parent A pre-filled -->
         <breeding-panel-component
           :username="username"
           :initial-url-a="breedPrefilledUrl"
