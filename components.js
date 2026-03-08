@@ -1181,6 +1181,7 @@ const BreedingPanelComponent = {
       urlB:        "",
       loading:     false,
       loadError:   "",
+      loadStatus:  "",   // progress message during multi-step async check
       genomeA:     null,
       genomeB:     null,
       childGenome: null,
@@ -1220,6 +1221,7 @@ const BreedingPanelComponent = {
   methods: {
     async breedCreatures() {
       this.loadError   = "";
+      this.loadStatus  = "";
       this.genomeA     = null;
       this.genomeB     = null;
       this.childGenome = null;
@@ -1239,6 +1241,7 @@ const BreedingPanelComponent = {
 
       this.loading = true;
       try {
+        this.loadStatus = "Loading parent genomes…";
         const [resA, resB] = await Promise.all([
           loadGenomeFromPost(ua),
           loadGenomeFromPost(ub)
@@ -1247,6 +1250,12 @@ const BreedingPanelComponent = {
         this.genomeA = resA.genome;
         this.genomeB = resB.genome;
 
+        // ---- Kinship check ----
+        this.loadStatus = "Checking ancestry and family relationships…";
+        await checkBreedingCompatibility(resA, resB);
+
+        // ---- Breed ----
+        this.loadStatus = "";
         const { child, mutated, speciated } = breedGenomes(resA.genome, resB.genome);
         this.childGenome = child;
         this.childName   = generateFullName(child);
@@ -1257,6 +1266,7 @@ const BreedingPanelComponent = {
           parentB: { author: resB.author, permlink: resB.permlink }
         };
       } catch (e) {
+        this.loadStatus = "";
         this.loadError = e.message || String(e);
       }
       this.loading = false;
@@ -1346,8 +1356,13 @@ const BreedingPanelComponent = {
           :disabled="loading"
           style="background:#1a3a2a;"
         >
-          {{ loading ? "Loading genomes…" : "🔬 Breed" }}
+          {{ loading ? "Checking…" : "🔬 Breed" }}
         </button>
+      </div>
+
+      <!-- Status message during kinship check -->
+      <div v-if="loadStatus" style="color:#80deea;font-size:12px;margin-top:8px;font-style:italic;">
+        ⏳ {{ loadStatus }}
       </div>
 
       <!-- Error -->
