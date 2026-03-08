@@ -1084,7 +1084,8 @@ const CreatureView = {
       children:      [],
       kinshipLoading: false,
       now:           new Date(),
-      facingRight:   false   // synced from the canvas component's random direction
+      facingRight:   false,   // synced from the canvas component's random direction
+      urlCopied:     false    // brief confirmation state for the copy button
     };
   },
   created() {
@@ -1234,7 +1235,25 @@ const CreatureView = {
     },
 
     onFeedStateUpdated(fs) { this.feedState = fs; },
-    onFacingResolved(dir)  { this.facingRight = dir; }
+    onFacingResolved(dir)  { this.facingRight = dir; },
+    copyUrl() {
+      if (!this.steemitUrl) return;
+      navigator.clipboard.writeText(this.steemitUrl).then(() => {
+        this.urlCopied = true;
+        setTimeout(() => { this.urlCopied = false; }, 1800);
+      }).catch(() => {
+        const ta = document.createElement("textarea");
+        ta.value = this.steemitUrl;
+        ta.style.position = "fixed";
+        ta.style.opacity  = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        this.urlCopied = true;
+        setTimeout(() => { this.urlCopied = false; }, 1800);
+      });
+    }
   },
 
   template: `
@@ -1296,11 +1315,27 @@ const CreatureView = {
         <h3 style="color:#a5d6a7;margin:16px 0 4px;">Genome</h3>
         <genome-table-component :genome="genome"></genome-table-component>
 
-        <!-- Steem post link -->
-        <div v-if="steemitUrl" style="margin:16px 0;font-size:13px;color:#666;">
-          📄 <a :href="steemitUrl" target="_blank" style="color:#80deea;">View original post on Steemit</a>
-          &nbsp;·&nbsp;
-          <span style="color:#444;">@{{ author }}/{{ permlink }}</span>
+        <!-- Steem post link + copy button -->
+        <div v-if="steemitUrl" style="margin:16px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
+          <a :href="steemitUrl" target="_blank" style="font-size:13px;color:#80deea;">
+            📄 View on Steemit
+          </a>
+          <span style="color:#333;font-size:13px;">·</span>
+          <span style="font-size:12px;color:#444;">@{{ author }}/{{ permlink }}</span>
+          <button
+            @click="copyUrl"
+            :style="{
+              padding: '4px 12px',
+              fontSize: '12px',
+              background: urlCopied ? '#1b3a1b' : '#1a1a1a',
+              color: urlCopied ? '#66bb6a' : '#555',
+              border: '1px solid ' + (urlCopied ? '#2e7d32' : '#2a2a2a'),
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }"
+            title="Copy Steemit URL to clipboard"
+          >{{ urlCopied ? "✓ Copied!" : "📋 Copy URL" }}</button>
         </div>
 
         <hr/>

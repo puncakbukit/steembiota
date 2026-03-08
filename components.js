@@ -818,6 +818,7 @@ const CreatureCardComponent = {
   name: "CreatureCardComponent",
   components: { CreatureCanvasComponent },
   props: { post: { type: Object, required: true } },
+  data() { return { copied: false }; },
   computed: {
     fossil()     { return this.post.age >= this.post.genome.LIF; },
     sexSymbol()  { return this.post.genome.SX === 0 ? "♂" : "♀"; },
@@ -826,7 +827,30 @@ const CreatureCardComponent = {
       const s = this.post.lifecycleStage;
       return s ? s.icon + " " + s.name : "";
     },
-    routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; }
+    routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; },
+    steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; }
+  },
+  methods: {
+    copyUrl(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      navigator.clipboard.writeText(this.steemitUrl).then(() => {
+        this.copied = true;
+        setTimeout(() => { this.copied = false; }, 1800);
+      }).catch(() => {
+        // Fallback for browsers without clipboard API
+        const ta = document.createElement("textarea");
+        ta.value = this.steemitUrl;
+        ta.style.position = "fixed";
+        ta.style.opacity  = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        this.copied = true;
+        setTimeout(() => { this.copied = false; }, 1800);
+      });
+    }
   },
   template: `
     <router-link :to="routePath" style="text-decoration:none;color:inherit;display:block;">
@@ -856,6 +880,22 @@ const CreatureCardComponent = {
           <span :style="{ color: stageColor }">{{ stageLabel }}</span>
         </div>
         <div style="font-size:0.65rem;color:#3a3a3a;margin-top:2px;">@{{ post.author }}</div>
+        <button
+          @click="copyUrl"
+          :style="{
+            marginTop: '7px',
+            padding: '3px 10px',
+            fontSize: '0.68rem',
+            background: copied ? '#1b3a1b' : '#1a1a1a',
+            color: copied ? '#66bb6a' : '#555',
+            border: '1px solid ' + (copied ? '#2e7d32' : '#2a2a2a'),
+            borderRadius: '5px',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            width: '100%'
+          }"
+          title="Copy Steemit URL"
+        >{{ copied ? "✓ Copied!" : "📋 Copy URL" }}</button>
       </div>
     </router-link>
   `
