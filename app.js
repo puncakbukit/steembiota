@@ -652,7 +652,7 @@ const HomeView = {
       now:            new Date(),
       feedState:      null,
       customTitle:    "",
-      _facingRight:   false,   // synced from the canvas component's random direction
+      facingRight:    false,   // synced from the canvas component's random direction
       // All-creatures list
       allCreatures:  [],
       listLoading:   true,
@@ -693,8 +693,8 @@ const HomeView = {
     }
   },
   watch: {
-    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this._facingRight); },
-    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this._facingRight); }
+    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this.facingRight); },
+    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this.facingRight); }
   },
   methods: {
     async loadCreatureList() {
@@ -712,9 +712,9 @@ const HomeView = {
       if (!this.isFounderAccount) { this.notify("Only @" + FOUNDER_ACCOUNT + " can create founder creatures.", "error"); return; }
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
-      this._facingRight   = Math.random() < 0.5;
+      this.facingRight    = Math.random() < 0.5;
       this.feedState      = null;
-      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null, this._facingRight);
+      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null, this.facingRight);
       this.customTitle    = buildDefaultTitle(generateFullName(this.genome), new Date(this.birthTimestamp));
     },
     async publishCreature() {
@@ -730,7 +730,11 @@ const HomeView = {
       });
     },
     prevPage() { if (this.listPage > 1) this.listPage--; },
-    nextPage() { if (this.listPage < this.totalPages) this.listPage++; }
+    nextPage() { if (this.listPage < this.totalPages) this.listPage++; },
+    onFacingResolved(dir) {
+      this.facingRight = dir;
+      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, this.feedState, dir);
+    }
   },
 
   template: `
@@ -746,7 +750,7 @@ const HomeView = {
         </div>
 
         <creature-canvas-component v-if="genome" :genome="genome" :age="age" :fossil="fossil" :feed-state="feedState"
-          @facing-resolved="dir => { _facingRight = dir; unicodeArt = buildUnicodeArt(genome, age, feedState, dir); }"
+          @facing-resolved="onFacingResolved"
         ></creature-canvas-component>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;">🦴 Fossilised. Genome preserved on-chain.</div>
 
@@ -1080,7 +1084,7 @@ const CreatureView = {
       children:      [],
       kinshipLoading: false,
       now:           new Date(),
-      _facingRight:  false   // synced from the canvas component's random direction
+      facingRight:   false   // synced from the canvas component's random direction
     };
   },
   created() {
@@ -1097,7 +1101,7 @@ const CreatureView = {
       if (!this.genome) return false;
       return (this.postAge ?? 0) >= this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
     },
-    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState, this._facingRight) : ""; },
+    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState, this.facingRight) : ""; },
     steemitUrl()       {
       if (!this.author || !this.permlink) return null;
       return "https://steemit.com/@" + this.author + "/" + this.permlink;
@@ -1229,7 +1233,8 @@ const CreatureView = {
       this.kinshipLoading = false;
     },
 
-    onFeedStateUpdated(fs) { this.feedState = fs; }
+    onFeedStateUpdated(fs) { this.feedState = fs; },
+    onFacingResolved(dir)  { this.facingRight = dir; }
   },
 
   template: `
@@ -1277,7 +1282,7 @@ const CreatureView = {
 
         <!-- Canvas render -->
         <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"
-          @facing-resolved="dir => { _facingRight = dir; }"
+          @facing-resolved="onFacingResolved"
         ></creature-canvas-component>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
           🦴 This creature has fossilised. Its genome is preserved on-chain.
