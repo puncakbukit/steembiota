@@ -368,6 +368,288 @@ function parseFeedEvents(replies, creatureAuthor) {
   return { total, ownerFeeds, communityFeeds, byFeeder };
 }
 
+// ============================================================
+// BREEDING KINSHIP CHECKER
+//
+// Prevents inbreeding and farming by forbidding breeding between
+// creatures that are related by blood. Forbidden relationships:
+//
+//   • Ancestors (parents, grandparents, … all the way up)
+//   • Descendants (children, grandchildren, … all the way down)
+//   • Siblings (full or half — any creature sharing ≥1 parent)
+//   • Parents' siblings (aunts/uncles, full or half)
+//   • Siblings' descendants (nieces/nephews and their progeny)
+//
+// Strategy:
+//   1. Walk ancestry of both creatures upward via json_metadata
+//      parentA/parentB fields (BFS, bounded by MAX_ANCESTOR_DEPTH).
+//   2. Collect every author seen during that walk.
+//   3. Fetch all SteemBiota posts by those authors to build a local
+//      corpus — this is where relatives are most likely to appear.
+//   4. Within the corpus, identify all relatives of each creature
+//      using the five rules above.
+//   5. Check that neither creature appears in the other's forbidden set.
+// ============================================================
+
+const MAX_ANCESTOR_DEPTH = 12;   // max generations to walk upward
+const POSTS_PER_AUTHOR   = 100;  // how many recent posts to fetch per author
+
+// Parse json_metadata from a raw Steem post object.
+// Returns the steembiota sub-object, or null if not a SteemBiota post.
+function steembiotaMeta(post) {
+  try {
+    const m = JSON.parse(post.json_metadata || "{}");
+    return (m && m.steembiota) ? m.steembiota : null;
+  } catch { return null; }
+}
+
+// Canonical key for a creature post.
+function nodeKey(author, permlink) { return `${author}/${permlink}`; }
+
+// Fetch a post and return its steembiota meta + key, or null.
+async function fetchSteembiotaPost(author, permlink) {
+  try {
+    const post = await fetchPost(author, permlink);
+    if (!post || !post.author) return null;
+    const meta = steembiotaMeta(post);
+    if (!meta) return null;
+    return { key: nodeKey(author, permlink), author, permlink, meta };
+  } catch { return null; }
+}
+
+// Walk ancestors of a creature upward via BFS.
+// Returns a Map<key, {author,permlink,meta,depth}> of all ancestors found.
+async function fetchAncestors(startAuthor, startPermlink) {
+  const visited = new Map();                           // key → node
+  const queue   = [{ author: startAuthor, permlink: startPermlink, depth: 0 }];
+
+  while (queue.length > 0) {
+    const { author, permlink, depth } = queue.shift();
+    const key = nodeKey(author, permlink);
+    if (visited.has(key)) continue;
+
+    const node = await fetchSteembiotaPost(author, permlink);
+    if (!node) continue;
+    visited.set(key, { ...node, depth });
+
+    if (depth >= MAX_ANCESTOR_DEPTH) continue;
+
+    // Enqueue parents if this was an offspring post
+    const pA = node.meta.parentA;
+    const pB = node.meta.parentB;
+    if (pA && pA.author && pA.permlink)
+      queue.push({ author: pA.author, permlink: pA.permlink, depth: depth + 1 });
+    if (pB && pB.author && pB.permlink)
+      queue.push({ author: pB.author, permlink: pB.permlink, depth: depth + 1 });
+  }
+
+  return visited;
+}
+
+// Fetch all SteemBiota posts by a set of authors and return as a Map<key, node>.
+async function fetchCorpusByAuthors(authorSet) {
+  const corpus = new Map();
+  await Promise.all([...authorSet].map(async author => {
+    try {
+      const posts = await fetchPostsByUser(author, POSTS_PER_AUTHOR);
+      if (!Array.isArray(posts)) return;
+      for (const post of posts) {
+        const meta = steembiotaMeta(post);
+        if (!meta) continue;
+        const key = nodeKey(post.author, post.permlink);
+        corpus.set(key, { key, author: post.author, permlink: post.permlink, meta });
+      }
+    } catch { /* skip author on error */ }
+  }));
+  return corpus;
+}
+
+// From a corpus Map, find all descendants of a set of keys (children, grandchildren, …).
+// Returns a Set<key> of all descendants.
+function findDescendants(seedKeys, corpus) {
+  const descendants = new Set();
+  let frontier = new Set(seedKeys);
+
+  while (frontier.size > 0) {
+    const nextFrontier = new Set();
+    for (const [key, node] of corpus) {
+      if (descendants.has(key)) continue;
+      const pA = node.meta.parentA;
+      const pB = node.meta.parentB;
+      const paKey = pA && pA.author ? nodeKey(pA.author, pA.permlink) : null;
+      const pbKey = pB && pB.author ? nodeKey(pB.author, pB.permlink) : null;
+      if ((paKey && frontier.has(paKey)) || (pbKey && frontier.has(pbKey))) {
+        descendants.add(key);
+        nextFrontier.add(key);
+      }
+    }
+    frontier = nextFrontier;
+  }
+  return descendants;
+}
+
+// Find all siblings of a set of keys (share ≥1 parent with any key in seedKeys).
+// parentMap: Map<key, [parentKeyA, parentKeyB]> built from the corpus.
+// Returns a Set<key> of siblings (excluding the seeds themselves).
+function findSiblings(seedKeys, corpus) {
+  // Collect parent keys for all seeds
+  const seedParents = new Set();
+  for (const seedKey of seedKeys) {
+    const node = corpus.get(seedKey);
+    if (!node) continue;
+    const pA = node.meta.parentA;
+    const pB = node.meta.parentB;
+    if (pA && pA.author) seedParents.add(nodeKey(pA.author, pA.permlink));
+    if (pB && pB.author) seedParents.add(nodeKey(pB.author, pB.permlink));
+  }
+  if (seedParents.size === 0) return new Set();
+
+  // Any corpus node that shares a parent with a seed is a sibling
+  const siblings = new Set();
+  for (const [key, node] of corpus) {
+    if (seedKeys.has(key)) continue;
+    const pA = node.meta.parentA;
+    const pB = node.meta.parentB;
+    const paKey = pA && pA.author ? nodeKey(pA.author, pA.permlink) : null;
+    const pbKey = pB && pB.author ? nodeKey(pB.author, pB.permlink) : null;
+    if ((paKey && seedParents.has(paKey)) || (pbKey && seedParents.has(pbKey))) {
+      siblings.add(key);
+    }
+  }
+  return siblings;
+}
+
+// Build the complete forbidden set for one creature identified by key.
+// ancestorMap : Map returned by fetchAncestors (includes the creature itself at depth 0)
+// corpus      : Map of all fetched SteemBiota posts by related authors
+// Returns Set<key> of all forbidden counterparts.
+function buildForbiddenSet(selfKey, ancestorMap, corpus) {
+  const forbidden = new Set();
+
+  // 1. Self (never breed with yourself — also caught by URL equality check)
+  forbidden.add(selfKey);
+
+  // 2. All ancestors
+  for (const key of ancestorMap.keys()) forbidden.add(key);
+
+  // 3. All descendants of self
+  const selfDescendants = findDescendants(new Set([selfKey]), corpus);
+  for (const k of selfDescendants) forbidden.add(k);
+
+  // 4. Siblings of self (share a parent with self)
+  const selfSiblings = findSiblings(new Set([selfKey]), corpus);
+  for (const k of selfSiblings) forbidden.add(k);
+
+  // 5. For each ancestor: its siblings (aunts/uncles) + those siblings' descendants
+  for (const ancKey of ancestorMap.keys()) {
+    // Siblings of this ancestor (parent's other children)
+    const ancSiblings = findSiblings(new Set([ancKey]), corpus);
+    for (const k of ancSiblings) forbidden.add(k);
+    // Descendants of those siblings (cousins, second cousins, …)
+    const sibDescendants = findDescendants(ancSiblings, corpus);
+    for (const k of sibDescendants) forbidden.add(k);
+  }
+
+  // 6. Descendants of self's siblings
+  const sibDescendants = findDescendants(selfSiblings, corpus);
+  for (const k of sibDescendants) forbidden.add(k);
+
+  return forbidden;
+}
+
+// ---- Main entry point ----
+//
+// resA, resB : objects from loadGenomeFromPost — { genome, author, permlink }
+//
+// Returns null if compatible, or throws an Error with a human-readable
+// explanation if the pair is forbidden.
+async function checkBreedingCompatibility(resA, resB) {
+  const keyA = nodeKey(resA.author, resA.permlink);
+  const keyB = nodeKey(resB.author, resB.permlink);
+
+  // Walk ancestors for both creatures in parallel
+  const [ancestorsA, ancestorsB] = await Promise.all([
+    fetchAncestors(resA.author, resA.permlink),
+    fetchAncestors(resB.author, resB.permlink)
+  ]);
+
+  // Remove self from ancestor maps (fetchAncestors includes depth-0 node)
+  ancestorsA.delete(keyA);
+  ancestorsB.delete(keyB);
+
+  // Collect all authors from both ancestry trees to build a rich corpus
+  const authorSet = new Set([resA.author, resB.author]);
+  for (const node of ancestorsA.values()) authorSet.add(node.author);
+  for (const node of ancestorsB.values()) authorSet.add(node.author);
+
+  // Fetch all SteemBiota posts by those authors + add known ancestor nodes to corpus
+  const corpus = await fetchCorpusByAuthors(authorSet);
+
+  // Seed corpus with ancestor nodes in case they predate the blog fetch window
+  for (const [k, n] of ancestorsA) corpus.set(k, n);
+  for (const [k, n] of ancestorsB) corpus.set(k, n);
+  // Also add the two creatures themselves
+  const nodeA = await fetchSteembiotaPost(resA.author, resA.permlink);
+  const nodeB = await fetchSteembiotaPost(resB.author, resB.permlink);
+  if (nodeA) corpus.set(keyA, nodeA);
+  if (nodeB) corpus.set(keyB, nodeB);
+
+  // Build forbidden sets for each creature
+  const forbiddenA = buildForbiddenSet(keyA, ancestorsA, corpus);
+  const forbiddenB = buildForbiddenSet(keyB, ancestorsB, corpus);
+
+  // Helper: describe the relationship for the error message
+  function describeRelationship(subjectKey, otherKey, ancestorMap, corpus) {
+    if (ancestorMap.has(otherKey)) {
+      const depth = ancestorMap.get(otherKey).depth;
+      if (depth === 1) return "a parent";
+      if (depth === 2) return "a grandparent";
+      if (depth === 3) return "a great-grandparent";
+      return `an ancestor (${depth} generations up)`;
+    }
+    // Check if other is a descendant of subject
+    const desc = findDescendants(new Set([subjectKey]), corpus);
+    if (desc.has(otherKey)) return "a descendant";
+
+    // Check if sibling
+    const sibs = findSiblings(new Set([subjectKey]), corpus);
+    if (sibs.has(otherKey)) return "a sibling";
+
+    // Check if aunt/uncle (sibling of an ancestor)
+    for (const [ancKey, ancNode] of ancestorMap) {
+      const ancSibs = findSiblings(new Set([ancKey]), corpus);
+      if (ancSibs.has(otherKey)) {
+        const depth = ancNode.depth;
+        if (depth === 1) return "an aunt or uncle";
+        return `a relative (sibling of an ancestor ${depth} generations up)`;
+      }
+      // Check if niece/nephew descendant (descendant of a sibling)
+      const selfSibs = findSiblings(new Set([subjectKey]), corpus);
+      const nibDescendants = findDescendants(selfSibs, corpus);
+      if (nibDescendants.has(otherKey)) return "a niece, nephew, or their descendant";
+    }
+    return "a close relative";
+  }
+
+  // Check compatibility
+  if (forbiddenA.has(keyB)) {
+    const rel = describeRelationship(keyA, keyB, ancestorsA, corpus);
+    throw new Error(
+      `Breeding forbidden: ${resB.author}/${resB.permlink} is ${rel} of ${resA.author}/${resA.permlink}. ` +
+      `SteemBiota prevents inbreeding to encourage genetic diversity.`
+    );
+  }
+  if (forbiddenB.has(keyA)) {
+    const rel = describeRelationship(keyB, keyA, ancestorsB, corpus);
+    throw new Error(
+      `Breeding forbidden: ${resA.author}/${resA.permlink} is ${rel} of ${resB.author}/${resB.permlink}. ` +
+      `SteemBiota prevents inbreeding to encourage genetic diversity.`
+    );
+  }
+
+  return null; // compatible
+}
+
 // ---- Utility ----
 
 // Build a Steem permlink from an arbitrary title string.
