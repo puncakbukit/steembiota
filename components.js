@@ -1417,9 +1417,7 @@ const BreedingPanelComponent = {
         (response) => {
           this.publishing = false;
           if (response.success) {
-            // Extract the child permlink from the response (Keychain returns it in result)
-            // Steem Keychain response structure varies; derive permlink from the title we used
-            const childPermlink = buildPermlink(this.customTitle);
+            const childPermlink = response.permlink;
 
             // Fire birth-announcement replies to both parents (best-effort, non-blocking)
             const art = this.childArt || "";
@@ -1449,15 +1447,7 @@ const BreedingPanelComponent = {
             }
 
             this.$emit("notify", "🧬 " + this.childName + " published to the blockchain!", "success");
-            // Reset form
-            this.urlA        = "";
-            this.urlB        = "";
-            this.genomeA     = null;
-            this.genomeB     = null;
-            this.childGenome = null;
-            this.childArt    = null;
-            this.breedInfo   = null;
-            this.customTitle = "";
+            this.$router.push("/@" + this.username + "/" + childPermlink);
           } else {
             this.$emit("notify", "Publish failed: " + (response.message || "Unknown error"), "error");
           }
