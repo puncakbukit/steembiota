@@ -197,9 +197,10 @@ function keychainLogin(username, callback) {
 // age             : number — days since creation (calculateAge)
 // lifecycleStage  : string — "Juvenile" | "Fertile Adult" | "Elder" | "Fossil"
 // callback        : (response) => { response.success, response.message }
-function publishCreature(username, genome, unicodeArt, creatureName, age, lifecycleStage, title, callback) {
+function publishCreature(username, genome, unicodeArt, creatureName, age, lifecycleStage, title, genusName, callback) {
   const permlink = buildPermlink(title);
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
+  const genusDisplay = genusName ? `${genusName} (GEN ${genome.GEN})` : `GEN ${genome.GEN}`;
 
   const creaturePageUrl = `${APP_URL}/#/@${username}/${permlink}`;
 
@@ -208,7 +209,7 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
     `**Sex:** ${sexLabel}  \n` +
     `**Age:** ${age} day${age === 1 ? "" : "s"}  \n` +
     `**Status:** ${lifecycleStage}  \n` +
-    `**Genus ID:** ${genome.GEN}  \n` +
+    `**Genus:** ${genusDisplay}  \n` +
     `**Hue:** ${genome.CLR}°  \n` +
     `**Lifespan:** ${genome.LIF} days  \n` +
     `**Fertile:** Day ${genome.FRT_START}–${genome.FRT_END}  \n` +
@@ -243,9 +244,10 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
 // ---- SteemBiota — publish a bred offspring to the blockchain ----
 //
 // breedInfo: { mutated, speciated, parentA: {author,permlink}, parentB: {author,permlink} }
-function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo, title, callback) {
+function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo, title, genusName, callback) {
   const permlink = buildPermlink(title);
   const sexLabel = genome.SX === 0 ? "Male" : "Female";
+  const genusDisplay = genusName ? `${genusName} (GEN ${genome.GEN})` : `GEN ${genome.GEN}`;
   const pA = breedInfo.parentA;
   const pB = breedInfo.parentB;
   const pAUrl = `https://steemit.com/@${pA.author}/${pA.permlink}`;
@@ -263,7 +265,7 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
     `## 🧬 ${creatureName}\n\n` +
     `**Sex:** ${sexLabel}  \n` +
     `**Age:** 0 days (newborn)  \n` +
-    `**Genus ID:** ${genome.GEN}  \n` +
+    `**Genus:** ${genusDisplay}  \n` +
     `**Lifespan:** ${genome.LIF} days  \n` +
     `**Fertile:** Day ${genome.FRT_START}–${genome.FRT_END}  \n` +
     `**Mutation tendency:** ${genome.MUT}  \n\n` +
