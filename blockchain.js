@@ -788,3 +788,11 @@ function steemDate(ts) {
   if (typeof ts === "string" && !ts.endsWith("Z")) ts += "Z";
   return new Date(ts);
 }
+
+// Fetch a user's comment/reply history (feed replies, birth replies, etc.)
+function fetchUserComments(username, limit = 100) {
+  return callWithFallbackAsync(
+    steem.api.getDiscussionsByComments,
+    [{ start_author: username, limit }]
+  );
+}

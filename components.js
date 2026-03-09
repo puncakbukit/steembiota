@@ -941,12 +941,15 @@ const GenomeTableComponent = {
 };
 
 // ---- GlobalProfileBannerComponent ----
-// Compact logged-in user banner shown on every page.
-// Displays cover image, avatar, display name, and @username.
+// Compact banner shown on every page.
+// Logged in: shows user's own profile + level badge + XP progress.
+// Logged out: shows @steembiota's profile as site identity (no level).
 const GlobalProfileBannerComponent = {
   name: "GlobalProfileBannerComponent",
   props: {
-    profileData: { type: Object, default: null }
+    profileData: { type: Object, default: null },
+    userLevel:   { type: Object, default: null },  // from computeUserLevel()
+    isLoggedIn:  { type: Boolean, default: false }
   },
   methods: {
     safeUrl(url) {
@@ -975,13 +978,50 @@ const GlobalProfileBannerComponent = {
           @error="$event.target.style.display='none'"
           style="width:52px;height:52px;border-radius:50%;border:2px solid #2e7d32;background:#222;margin-top:-26px;flex-shrink:0;object-fit:cover;"
         />
-        <div style="text-align:left;margin-top:4px;min-width:0;">
-          <div style="font-size:0.95rem;font-weight:bold;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-            {{ profileData.displayName }}
+        <div style="text-align:left;margin-top:4px;min-width:0;flex:1;">
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+            <div style="font-size:0.95rem;font-weight:bold;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              {{ profileData.displayName }}
+            </div>
+            <!-- Level badge (logged-in only) -->
+            <div v-if="isLoggedIn && userLevel" :title="'XP: ' + userLevel.totalXp" style="display:inline-flex;align-items:center;gap:4px;background:#1a2e1a;border:1px solid #2e7d32;border-radius:12px;padding:1px 8px;font-size:0.72rem;white-space:nowrap;cursor:default;">
+              <span>{{ userLevel.icon }}</span>
+              <span style="color:#a5d6a7;font-weight:bold;">{{ userLevel.rank }}</span>
+              <span style="color:#555;">·</span>
+              <span style="color:#66bb6a;">{{ userLevel.totalXp }} XP</span>
+            </div>
           </div>
           <div style="font-size:0.78rem;color:#66bb6a;">@{{ profileData.username }}</div>
           <div v-if="profileData.about" style="font-size:0.75rem;color:#666;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px;">
             {{ profileData.about }}
+          </div>
+          <!-- XP progress bar toward next rank (logged-in only) -->
+          <div v-if="isLoggedIn && userLevel && userLevel.nextRank" style="margin-top:6px;max-width:340px;">
+            <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#555;margin-bottom:3px;">
+              <span>→ {{ userLevel.nextRankIcon }} {{ userLevel.nextRank }}</span>
+              <span>{{ userLevel.totalXp }} / {{ userLevel.nextRankXp }} XP</span>
+            </div>
+            <div style="background:#111;border:1px solid #2a2a2a;border-radius:4px;height:5px;overflow:hidden;">
+              <div :style="{
+                width: Math.round(userLevel.progressToNext * 100) + '%',
+                height: '100%',
+                background: 'linear-gradient(90deg, #2e7d32, #66bb6a)',
+                borderRadius: '4px',
+                transition: 'width 0.6s ease'
+              }"></div>
+            </div>
+          </div>
+          <!-- Max rank message -->
+          <div v-if="isLoggedIn && userLevel && !userLevel.nextRank" style="font-size:0.7rem;color:#66bb6a;margin-top:4px;">
+            ✦ Maximum rank achieved
+          </div>
+          <!-- Activity breakdown tooltip row -->
+          <div v-if="isLoggedIn && userLevel" style="font-size:0.68rem;color:#444;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            🌱 {{ userLevel.breakdown.founders }} founders
+            &nbsp;·&nbsp; 🐣 {{ userLevel.breakdown.offspring }} offspring
+            &nbsp;·&nbsp; 🍃 {{ userLevel.breakdown.feedsGiven }} feeds
+            &nbsp;·&nbsp; 🔬 {{ userLevel.breakdown.genera }} genera
+            <template v-if="userLevel.breakdown.speciated > 0">&nbsp;·&nbsp; ⚡ {{ userLevel.breakdown.speciated }} speciation{{ userLevel.breakdown.speciated > 1 ? 's' : '' }}</template>
           </div>
         </div>
       </div>
@@ -1179,7 +1219,12 @@ const FeedingPanelComponent = {
     <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
       <h3 style="color:#66bb6a;margin:0 0 12px;">🍃 Feed a Creature</h3>
 
-      <!-- URL input + load -->
+      <!-- Login gate -->
+      <div v-if="!username" style="text-align:center;padding:18px 0;color:#555;font-size:13px;">
+        🔒 <a href="#" @click.prevent style="color:#66bb6a;text-decoration:none;cursor:default;">Log in</a> to feed creatures.
+      </div>
+
+      <template v-else>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
         <input
           v-model="postUrl"
@@ -1261,9 +1306,9 @@ const FeedingPanelComponent = {
           style="background:#1b3a1b;"
         >{{ feedButtonLabel }}</button>
 
-        <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">Log in to feed.</p>
         <p v-if="alreadyFedToday" style="color:#555;font-size:12px;margin:4px 0;">Come back tomorrow to feed again.</p>
       </div>
+      </template>
     </div>
   `
 };
@@ -1460,6 +1505,12 @@ const BreedingPanelComponent = {
       <h3 style="color:#80deea;margin:0 0 4px;">🧬 Breed Creatures</h3>
       <p style="font-size:12px;color:#555;margin:0 0 12px;">Requires one ♂ Male and one ♀ Female of the same genus.</p>
 
+      <!-- Login gate -->
+      <div v-if="!username" style="text-align:center;padding:18px 0;color:#555;font-size:13px;">
+        🔒 Log in to breed creatures.
+      </div>
+
+      <template v-else>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
         <!-- Parent A -->
         <div style="position:relative;">
@@ -1558,10 +1609,8 @@ const BreedingPanelComponent = {
         >
           {{ publishing ? "Publishing…" : "📡 Publish Offspring to Steem" }}
         </button>
-        <p v-if="!username" style="color:#888;font-size:13px;margin:4px 0;">
-          Log in to publish.
-        </p>
       </div>
+      </template>
     </div>
   `
 };
