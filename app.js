@@ -1608,11 +1608,227 @@ const CreatureView = {
 
 
 
+// ============================================================
+// LEADERBOARD HELPERS
+// ============================================================
+
+// Compute per-author XP from a flat array of raw Steem posts (no comments).
+// Returns an array of { author, xp, breakdown } sorted by XP descending.
+function computeLeaderboardEntries(rawPosts) {
+  const byAuthor = {};   // author -> { founders, offspring, genera:Set, speciated }
+
+  for (const p of (rawPosts || [])) {
+    let meta = {};
+    try { meta = JSON.parse(p.json_metadata || "{}"); } catch {}
+    const sb = meta.steembiota;
+    if (!sb) continue;
+    const a = p.author;
+    if (!byAuthor[a]) byAuthor[a] = { founders: 0, offspring: 0, genera: new Set(), speciated: 0 };
+    if (sb.type === "founder") {
+      byAuthor[a].founders++;
+      if (sb.genome) byAuthor[a].genera.add(sb.genome.GEN);
+    } else if (sb.type === "offspring") {
+      byAuthor[a].offspring++;
+      if (sb.genome) byAuthor[a].genera.add(sb.genome.GEN);
+      if (sb.speciated) byAuthor[a].speciated++;
+    }
+  }
+
+  return Object.entries(byAuthor).map(([author, d]) => {
+    const xp =
+      d.founders   * 100 +
+      d.offspring  * 60  +
+      d.genera.size * 25 +
+      d.speciated  * 75;
+    const rank = USER_RANKS.find(r => xp >= r.minXp) || USER_RANKS[USER_RANKS.length - 1];
+    return {
+      author,
+      xp,
+      rank:    rank.title,
+      icon:    rank.icon,
+      breakdown: {
+        founders:  d.founders,
+        offspring: d.offspring,
+        genera:    d.genera.size,
+        speciated: d.speciated
+      }
+    };
+  }).sort((a, b) => b.xp - a.xp);
+}
+
+// ---- LeaderboardView ----
+const LeaderboardView = {
+  name: "LeaderboardView",
+  inject: ["notify"],
+  components: { LoadingSpinnerComponent },
+  data() {
+    return {
+      entries:   [],   // sorted leaderboard rows with profile data merged
+      loading:   true,
+      loadError: "",
+      topXp:     1     // used to scale XP bars
+    };
+  },
+  async created() {
+    this.loading   = true;
+    this.loadError = "";
+    try {
+      // Single tag scan — 200 posts gives reasonable coverage
+      const raw  = await fetchPostsByTag("steembiota", 200);
+      const computed = computeLeaderboardEntries(Array.isArray(raw) ? raw : []);
+
+      if (computed.length === 0) {
+        this.entries = [];
+        this.loading = false;
+        return;
+      }
+
+      // Batch-fetch all author profiles in one API call
+      const authors  = computed.map(e => e.author);
+      const profiles = await fetchAccountsBatch(authors);
+
+      this.entries = computed.map(e => ({
+        ...e,
+        profile: profiles[e.author] || { username: e.author, displayName: e.author, profileImage: "", about: "" }
+      }));
+      this.topXp = Math.max(1, this.entries[0]?.xp ?? 1);
+    } catch (e) {
+      this.loadError = e.message || "Failed to load leaderboard.";
+    }
+    this.loading = false;
+  },
+  methods: {
+    safeUrl(url) {
+      try { return new URL(url).protocol === "https:" ? url : ""; } catch { return ""; }
+    },
+    medalColor(rank) {
+      if (rank === 1) return "#ffd700";
+      if (rank === 2) return "#c0c0c0";
+      if (rank === 3) return "#cd7f32";
+      return "#444";
+    },
+    rankColor(rankTitle) {
+      const colors = {
+        "Progenitor":   "#ffd700",
+        "Evolutionist": "#80deea",
+        "Ecologist":    "#a5d6a7",
+        "Breeder":      "#f48fb1",
+        "Cultivator":   "#66bb6a",
+        "Naturalist":   "#90caf9",
+        "Wanderer":     "#555"
+      };
+      return colors[rankTitle] || "#555";
+    }
+  },
+  template: `
+    <div style="margin-top:20px;padding:0 16px 40px;">
+      <h2 style="color:#a5d6a7;margin:0 0 4px;font-size:1.1rem;letter-spacing:0.05em;">🏆 Leaderboard</h2>
+      <p style="font-size:12px;color:#444;margin:0 0 20px;">
+        Ranked by XP from founders, offspring, genera contributed &amp; speciation events.
+        Feed XP not included (requires per-user scan).
+      </p>
+
+      <loading-spinner-component v-if="loading"></loading-spinner-component>
+      <div v-else-if="loadError" style="color:#ff8a80;font-size:13px;">⚠ {{ loadError }}</div>
+      <div v-else-if="entries.length === 0" style="color:#555;font-size:13px;">No activity on-chain yet.</div>
+
+      <div v-else style="max-width:700px;margin:0 auto;display:flex;flex-direction:column;gap:10px;">
+        <router-link
+          v-for="(entry, idx) in entries"
+          :key="entry.author"
+          :to="'/@' + entry.author"
+          style="text-decoration:none;"
+        >
+          <div :style="{
+            background: idx === 0 ? 'linear-gradient(135deg,#1a2a0a,#0f1a0f)' : '#111',
+            border: '1px solid ' + (idx < 3 ? medalColor(idx+1) : '#222'),
+            borderRadius: '10px',
+            padding: '12px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            transition: 'background 0.15s',
+            cursor: 'pointer'
+          }"
+          @mouseover="$event.currentTarget.style.background='#1a2a1a'"
+          @mouseleave="$event.currentTarget.style.background = idx===0 ? 'linear-gradient(135deg,#1a2a0a,#0f1a0f)' : '#111'"
+          >
+            <!-- Position number -->
+            <div :style="{
+              minWidth: '28px',
+              textAlign: 'center',
+              fontWeight: 'bold',
+              fontSize: idx < 3 ? '1.2rem' : '0.85rem',
+              color: medalColor(idx+1),
+              flexShrink: 0
+            }">
+              {{ idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '#' + (idx+1) }}
+            </div>
+
+            <!-- Avatar -->
+            <img
+              v-if="safeUrl(entry.profile.profileImage)"
+              :src="safeUrl(entry.profile.profileImage)"
+              @error="$event.target.style.display='none'"
+              style="width:38px;height:38px;border-radius:50%;object-fit:cover;border:1px solid #333;flex-shrink:0;"
+            />
+            <div v-else style="width:38px;height:38px;border-radius:50%;background:#1a2e1a;border:1px solid #333;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1rem;">
+              🌿
+            </div>
+
+            <!-- Name + rank + XP bar -->
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:0.9rem;font-weight:bold;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;">
+                  {{ entry.profile.displayName }}
+                </span>
+                <span style="font-size:0.72rem;color:#555;">@{{ entry.author }}</span>
+                <span :style="{
+                  fontSize: '0.7rem',
+                  color: rankColor(entry.rank),
+                  background: '#111',
+                  border: '1px solid #2a2a2a',
+                  borderRadius: '10px',
+                  padding: '1px 7px',
+                  whiteSpace: 'nowrap'
+                }">{{ entry.icon }} {{ entry.rank }}</span>
+              </div>
+
+              <!-- XP bar -->
+              <div style="margin-top:5px;background:#1a1a1a;border-radius:4px;height:5px;overflow:hidden;max-width:360px;">
+                <div :style="{
+                  width: Math.round((entry.xp / topXp) * 100) + '%',
+                  height: '100%',
+                  background: 'linear-gradient(90deg,#2e7d32,#66bb6a)',
+                  borderRadius: '4px'
+                }"></div>
+              </div>
+
+              <!-- Activity breakdown -->
+              <div style="font-size:0.68rem;color:#444;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                <span style="color:#66bb6a;font-weight:bold;">{{ entry.xp }} XP</span>
+                &nbsp;·&nbsp; 🌱 {{ entry.breakdown.founders }}
+                &nbsp;·&nbsp; 🐣 {{ entry.breakdown.offspring }}
+                &nbsp;·&nbsp; 🔬 {{ entry.breakdown.genera }} genera
+                <template v-if="entry.breakdown.speciated > 0">
+                  &nbsp;·&nbsp; ⚡ {{ entry.breakdown.speciated }} spec.
+                </template>
+              </div>
+            </div>
+          </div>
+        </router-link>
+      </div>
+    </div>
+  `
+};
+
+
 const routes = [
-  { path: "/",                    component: HomeView    },
-  { path: "/about",               component: AboutView   },
-  { path: "/@:author/:permlink",  component: CreatureView },
-  { path: "/@:user",              component: ProfileView },
+  { path: "/",                    component: HomeView       },
+  { path: "/about",               component: AboutView      },
+  { path: "/leaderboard",         component: LeaderboardView },
+  { path: "/@:author/:permlink",  component: CreatureView   },
+  { path: "/@:user",              component: ProfileView    },
 ];
 
 const router = createRouter({
@@ -1746,13 +1962,14 @@ const App = {
 
     <!-- Navigation -->
     <nav>
-      <router-link to="/"       exact-active-class="nav-active">Home</router-link>
+      <router-link to="/"            exact-active-class="nav-active">Home</router-link>
       <router-link
         v-if="username"
         :to="'/@' + username"
         exact-active-class="nav-active"
       >Profile</router-link>
-      <router-link to="/about"  exact-active-class="nav-active">About</router-link>
+      <router-link to="/leaderboard" exact-active-class="nav-active">🏆 Leaderboard</router-link>
+      <router-link to="/about"       exact-active-class="nav-active">About</router-link>
 
       <a v-if="!username" href="#" @click.prevent="showLoginForm = !showLoginForm">Login</a>
       <a v-else           href="#" @click.prevent="logout">Logout (@{{ username }})</a>
@@ -1817,6 +2034,7 @@ vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("FeedingPanelComponent",       FeedingPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
+vueApp.component("LeaderboardView",             LeaderboardView);
 
 vueApp.use(router);
 vueApp.mount("#app");

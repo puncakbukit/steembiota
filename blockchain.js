@@ -73,6 +73,34 @@ function fetchAccount(username) {
   });
 }
 
+// Fetch multiple Steem accounts in one API call.
+// Returns a map of { username: profileData } for all found accounts.
+function fetchAccountsBatch(usernames) {
+  return new Promise(resolve => {
+    if (!usernames || !usernames.length) return resolve({});
+    steem.api.getAccounts(usernames, (err, result) => {
+      if (err || !result) return resolve({});
+      const map = {};
+      for (const account of result) {
+        let profile = {};
+        try {
+          profile = JSON.parse(
+            account.posting_json_metadata || account.json_metadata
+          ).profile || {};
+        } catch {}
+        map[account.name] = {
+          username:     account.name,
+          profileImage: profile.profile_image || "",
+          displayName:  profile.name || account.name,
+          about:        profile.about || "",
+          coverImage:   profile.cover_image || ""
+        };
+      }
+      resolve(map);
+    });
+  });
+}
+
 // ---- Post / comment helpers ----
 
 function fetchPost(author, permlink) {
