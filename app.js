@@ -641,7 +641,7 @@ const HomeView = {
   },
   data() {
     return {
-      // Founder creation (steembiota-only)
+      // Founder creation
       genome:         null,
       unicodeArt:     "",
       publishing:     false,
@@ -649,12 +649,15 @@ const HomeView = {
       now:            new Date(),
       feedState:      null,
       customTitle:    "",
-      facingRight:    false,   // synced from the canvas component's random direction
-      // All-creatures list
+      facingRight:    false,
+      genusInput:     "",      // user-specified genus (0–999), blank = random
+      // All-creatures list + filters
       allCreatures:  [],
       listLoading:   true,
       listError:     "",
-      listPage:      1
+      listPage:      1,
+      filterGenus:   "",       // "" = all, otherwise genus number as string
+      filterSex:     ""        // "" = all, "0" = male, "1" = female
     };
   },
   created() {
@@ -678,15 +681,33 @@ const HomeView = {
     },
     lifecycleColor() { return this.lifecycleStage ? this.lifecycleStage.color : "#888"; },
     lifecycleIcon()  { return this.lifecycleStage ? this.lifecycleStage.icon  : "";    },
-    totalPages()    { return Math.max(1, Math.ceil(this.allCreatures.length / PAGE_SIZE)); },
+    genusInputValid() {
+      if (this.genusInput === "") return true;   // blank = random, always ok
+      const n = Number(this.genusInput);
+      return Number.isInteger(n) && n >= 0 && n <= 999;
+    },
+    availableGenera() {
+      const set = new Set(this.allCreatures.map(c => c.genome.GEN));
+      return [...set].sort((a, b) => a - b);
+    },
+    filteredCreatures() {
+      return this.allCreatures.filter(c => {
+        if (this.filterGenus !== "" && c.genome.GEN !== Number(this.filterGenus)) return false;
+        if (this.filterSex   !== "" && c.genome.SX  !== Number(this.filterSex))   return false;
+        return true;
+      });
+    },
+    totalPages()    { return Math.max(1, Math.ceil(this.filteredCreatures.length / PAGE_SIZE)); },
     pagedCreatures() {
       const s = (this.listPage - 1) * PAGE_SIZE;
-      return this.allCreatures.slice(s, s + PAGE_SIZE);
+      return this.filteredCreatures.slice(s, s + PAGE_SIZE);
     }
   },
   watch: {
     age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this.facingRight); },
-    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this.facingRight); }
+    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this.facingRight); },
+    filterGenus() { this.listPage = 1; },
+    filterSex()   { this.listPage = 1; }
   },
   methods: {
     async loadCreatureList() {
@@ -702,8 +723,11 @@ const HomeView = {
     },
     createFounder() {
       if (!this.username) { this.notify("Please log in first.", "error"); return; }
+      if (!this.genusInputValid) { this.notify("Genus must be a whole number from 0 to 999.", "error"); return; }
       this.birthTimestamp = new Date().toISOString();
       this.genome         = generateGenome();
+      // Override GEN if the user specified one
+      if (this.genusInput !== "") this.genome.GEN = Number(this.genusInput);
       this.facingRight    = Math.random() < 0.5;
       this.feedState      = null;
       this.unicodeArt     = buildUnicodeArt(this.genome, 0, null, this.facingRight);
@@ -733,7 +757,18 @@ const HomeView = {
 
       <!-- Founder creation — visible to any logged-in user -->
       <div v-if="username">
-        <button @click="createFounder">🌱 Create Founder Creature</button>
+        <div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:8px;">
+          <label style="font-size:13px;color:#888;">Genus (0–999, blank = random):</label>
+          <input
+            v-model="genusInput"
+            type="number"
+            min="0" max="999" step="1"
+            placeholder="random"
+            style="width:90px;font-size:13px;padding:5px 8px;"
+            @keydown.enter="createFounder"
+          />
+          <button @click="createFounder" :disabled="!genusInputValid">🌱 Create Founder Creature</button>
+        </div>
 
         <div v-if="creatureName" style="margin:16px 0 6px;">
           <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;">🧬 {{ creatureName }}</div>
@@ -780,7 +815,7 @@ const HomeView = {
       <h3 style="color:#a5d6a7;margin:18px 0 12px;font-size:1rem;letter-spacing:0.04em;">
         🌿 All Creatures
         <span v-if="!listLoading && !listError" style="font-size:0.75rem;color:#555;font-weight:normal;margin-left:8px;">
-          ({{ allCreatures.length }} total)
+          ({{ filteredCreatures.length }}{{ filteredCreatures.length !== allCreatures.length ? ' of ' + allCreatures.length : '' }} total)
         </span>
       </h3>
 
@@ -789,6 +824,35 @@ const HomeView = {
       <div v-else-if="allCreatures.length === 0" style="color:#555;font-size:13px;">No creatures published yet.</div>
 
       <template v-else>
+        <!-- Filters -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:14px;">
+          <select
+            v-model="filterGenus"
+            style="padding:5px 8px;font-size:13px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
+          >
+            <option value="">All genera</option>
+            <option v-for="g in availableGenera" :key="g" :value="String(g)">Genus {{ g }}</option>
+          </select>
+          <div style="display:flex;gap:4px;">
+            <button
+              @click="filterSex = ''"
+              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='' ? '#2e7d32' : '#1a1a1a', color: filterSex==='' ? '#fff' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >All</button>
+            <button
+              @click="filterSex = '0'"
+              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='0' ? '#1565c0' : '#1a1a1a', color: filterSex==='0' ? '#90caf9' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >♂ Male</button>
+            <button
+              @click="filterSex = '1'"
+              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='1' ? '#880e4f' : '#1a1a1a', color: filterSex==='1' ? '#f48fb1' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >♀ Female</button>
+          </div>
+        </div>
+
+        <div v-if="filteredCreatures.length === 0" style="color:#555;font-size:13px;margin:12px 0;">
+          No creatures match the current filter.
+        </div>
+        <template v-else>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
           <creature-card-component
             v-for="c in pagedCreatures"
@@ -802,6 +866,7 @@ const HomeView = {
           <span style="font-size:13px;color:#555;">{{ listPage }} / {{ totalPages }}</span>
           <button @click="nextPage" :disabled="listPage === totalPages" style="padding:5px 14px;background:#1a2a1a;">Next ▶</button>
         </div>
+        </template>
       </template>
 
     </div>
@@ -976,10 +1041,12 @@ const ProfileView = {
   components: { CreatureCardComponent, LoadingSpinnerComponent },
   data() {
     return {
-      creatures:  [],
-      loading:    true,
-      loadError:  "",
-      listPage:   1
+      creatures:   [],
+      loading:     true,
+      loadError:   "",
+      listPage:    1,
+      filterGenus: "",   // "" = all, otherwise genus number as string
+      filterSex:   ""    // "" = all, "0" = male, "1" = female
     };
   },
   async created() {
@@ -996,11 +1063,26 @@ const ProfileView = {
   },
   computed: {
     username()   { return this.$route.params.user; },
-    totalPages() { return Math.max(1, Math.ceil(this.creatures.length / PAGE_SIZE)); },
+    availableGenera() {
+      const set = new Set(this.creatures.map(c => c.genome.GEN));
+      return [...set].sort((a, b) => a - b);
+    },
+    filteredCreatures() {
+      return this.creatures.filter(c => {
+        if (this.filterGenus !== "" && c.genome.GEN !== Number(this.filterGenus)) return false;
+        if (this.filterSex   !== "" && c.genome.SX  !== Number(this.filterSex))   return false;
+        return true;
+      });
+    },
+    totalPages() { return Math.max(1, Math.ceil(this.filteredCreatures.length / PAGE_SIZE)); },
     pagedCreatures() {
       const s = (this.listPage - 1) * PAGE_SIZE;
-      return this.creatures.slice(s, s + PAGE_SIZE);
+      return this.filteredCreatures.slice(s, s + PAGE_SIZE);
     }
+  },
+  watch: {
+    filterGenus() { this.listPage = 1; },
+    filterSex()   { this.listPage = 1; }
   },
   methods: {
     prevPage() { if (this.listPage > 1) this.listPage--; },
@@ -1022,8 +1104,40 @@ const ProfileView = {
       </div>
 
       <template v-else>
-        <p style="font-size:12px;color:#444;margin:0 0 12px;">{{ creatures.length }} creature{{ creatures.length === 1 ? '' : 's' }}</p>
+        <p style="font-size:12px;color:#444;margin:0 0 12px;">
+          {{ filteredCreatures.length }}{{ filteredCreatures.length !== creatures.length ? ' of ' + creatures.length : '' }}
+          creature{{ filteredCreatures.length === 1 ? '' : 's' }}
+        </p>
 
+        <!-- Filters -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:14px;">
+          <select
+            v-model="filterGenus"
+            style="padding:5px 8px;font-size:13px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
+          >
+            <option value="">All genera</option>
+            <option v-for="g in availableGenera" :key="g" :value="String(g)">Genus {{ g }}</option>
+          </select>
+          <div style="display:flex;gap:4px;">
+            <button
+              @click="filterSex = ''"
+              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='' ? '#2e7d32' : '#1a1a1a', color: filterSex==='' ? '#fff' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >All</button>
+            <button
+              @click="filterSex = '0'"
+              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='0' ? '#1565c0' : '#1a1a1a', color: filterSex==='0' ? '#90caf9' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >♂ Male</button>
+            <button
+              @click="filterSex = '1'"
+              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='1' ? '#880e4f' : '#1a1a1a', color: filterSex==='1' ? '#f48fb1' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >♀ Female</button>
+          </div>
+        </div>
+
+        <div v-if="filteredCreatures.length === 0" style="color:#555;font-size:13px;margin:12px 0;">
+          No creatures match the current filter.
+        </div>
+        <template v-else>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
           <creature-card-component
             v-for="c in pagedCreatures"
@@ -1037,6 +1151,7 @@ const ProfileView = {
           <span style="font-size:13px;color:#555;">{{ listPage }} / {{ totalPages }}</span>
           <button @click="nextPage" :disabled="listPage === totalPages" style="padding:5px 14px;background:#1a2a1a;">Next ▶</button>
         </div>
+        </template>
       </template>
 
     </div>
