@@ -148,6 +148,89 @@ function parseSteembiotaPosts(rawPosts) {
   return results;
 }
 
+// ============================================================
+// STEEMBIOTA USER LEVEL SYSTEM
+//
+// Derives XP from on-chain activity and maps it to a named rank.
+// Sources:
+//   - Founder creatures published (type:"founder")  → 100 XP each
+//   - Offspring bred and published (type:"offspring") → 60 XP each
+//   - Feed replies sent (type:"feed")               → 10 XP each
+//   - Unique genera contributed (distinct GEN values in own creatures) → 25 XP each
+//   - Speciation event in own offspring             → 75 XP bonus each
+//
+// Ranks (cumulative XP thresholds):
+//   0    Wanderer      🌿
+//   100  Naturalist    🔬
+//   300  Cultivator    🌱
+//   700  Breeder       🐣
+//   1500 Ecologist     🍃
+//   3000 Evolutionist  🧬
+//   6000 Progenitor    🌳
+// ============================================================
+
+const USER_RANKS = [
+  { minXp: 6000, title: "Progenitor",   icon: "🌳" },
+  { minXp: 3000, title: "Evolutionist", icon: "🧬" },
+  { minXp: 1500, title: "Ecologist",    icon: "🍃" },
+  { minXp:  700, title: "Breeder",      icon: "🐣" },
+  { minXp:  300, title: "Cultivator",   icon: "🌱" },
+  { minXp:  100, title: "Naturalist",   icon: "🔬" },
+  { minXp:    0, title: "Wanderer",     icon: "🌿" },
+];
+
+function computeUserLevel(posts, comments) {
+  // posts = result of fetchPostsByUser (top-level posts only)
+  // comments = result of fetchUserComments (replies/comments)
+  const allItems  = [...(posts || []), ...(comments || [])];
+  let founders    = 0;
+  let offspring   = 0;
+  let feedsGiven  = 0;
+  let speciated   = 0;
+  const genera    = new Set();
+
+  for (const item of allItems) {
+    let meta = {};
+    try { meta = JSON.parse(item.json_metadata || "{}"); } catch {}
+    const sb = meta.steembiota;
+    if (!sb) continue;
+    if (sb.type === "founder") {
+      founders++;
+      if (sb.genome) genera.add(sb.genome.GEN);
+    } else if (sb.type === "offspring") {
+      offspring++;
+      if (sb.genome) genera.add(sb.genome.GEN);
+      if (sb.speciated) speciated++;
+    } else if (sb.type === "feed") {
+      feedsGiven++;
+    }
+  }
+
+  const xpFounders   = founders   * 100;
+  const xpOffspring  = offspring  * 60;
+  const xpFeeds      = feedsGiven * 10;
+  const xpGenera     = genera.size * 25;
+  const xpSpeciation = speciated   * 75;
+  const totalXp      = xpFounders + xpOffspring + xpFeeds + xpGenera + xpSpeciation;
+
+  const rank = USER_RANKS.find(r => totalXp >= r.minXp) || USER_RANKS[USER_RANKS.length - 1];
+  const nextRank = USER_RANKS[USER_RANKS.indexOf(rank) - 1] || null;
+  const progressToNext = nextRank
+    ? Math.min((totalXp - rank.minXp) / (nextRank.minXp - rank.minXp), 1.0)
+    : 1.0;
+
+  return {
+    totalXp,
+    rank: rank.title,
+    icon: rank.icon,
+    nextRank: nextRank ? nextRank.title : null,
+    nextRankIcon: nextRank ? nextRank.icon : null,
+    nextRankXp: nextRank ? nextRank.minXp : null,
+    progressToNext,
+    breakdown: { founders, offspring, feedsGiven, genera: genera.size, speciated }
+  };
+}
+
 // Breed two genomes into a child genome.
 // Returns { child, mutated, speciated } for display purposes.
 function breedGenomes(a, b) {
@@ -1561,14 +1644,30 @@ const App = {
     const isLoggingIn   = ref(false);
     const notification  = ref({ message: "", type: "error" });
     const profileData   = ref(null);
+    const userLevel     = ref(null);   // computed from on-chain activity
 
     async function loadProfile(user) {
       if (!user) {
         // No logged-in user — show @steembiota's profile as the site identity
         profileData.value = await fetchAccount("steembiota");
+        userLevel.value   = null;
         return;
       }
       profileData.value = await fetchAccount(user);
+      // Load level data in parallel (best-effort — failure is non-fatal)
+      try {
+        const [posts, comments] = await Promise.all([
+          fetchPostsByUser(user, 100),
+          fetchUserComments(user, 100)
+        ]);
+        userLevel.value = computeUserLevel(
+          Array.isArray(posts)    ? posts    : [],
+          Array.isArray(comments) ? comments : []
+        );
+      } catch (e) {
+        console.warn("Level load failed:", e);
+        userLevel.value = null;
+      }
     }
 
     function notify(message, type = "error") {
@@ -1638,7 +1737,7 @@ const App = {
       username, hasKeychain, keychainReady,
       loginError, showLoginForm, isLoggingIn,
       notification, notify, dismissNotification,
-      login, logout, profileData
+      login, logout, profileData, userLevel
     };
   },
 
@@ -1691,6 +1790,8 @@ const App = {
     <!-- Global profile banner — logged-in user, or @steembiota as fallback -->
     <global-profile-banner-component
       :profile-data="profileData"
+      :user-level="userLevel"
+      :is-logged-in="!!username"
     ></global-profile-banner-component>
 
     <hr/>
