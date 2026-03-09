@@ -96,6 +96,8 @@ function parseSteemUrl(url) {
 
 // Load a genome from a published SteemBiota post.
 // Tries json_metadata first (fast), falls back to body regex.
+// Returns { genome, author, permlink, age } where age is the creature's
+// current age in days (stored age + elapsed days since post.created).
 async function loadGenomeFromPost(url) {
   const { author, permlink } = parseSteemUrl(url);
   const post = await fetchPost(author, permlink);
@@ -105,14 +107,19 @@ async function loadGenomeFromPost(url) {
   try {
     const meta = JSON.parse(post.json_metadata || "{}");
     if (meta.steembiota && meta.steembiota.genome) {
-      return { genome: meta.steembiota.genome, author, permlink };
+      const storedAge  = meta.steembiota.age ?? 0;
+      const elapsed    = calculateAge(post.created);   // days since post was published
+      const currentAge = storedAge + elapsed;
+      return { genome: meta.steembiota.genome, author, permlink, age: currentAge };
     }
   } catch {}
 
   // Fallback: parse ```genome ... ``` block from post body
   const match = post.body.match(/```genome\s*([\s\S]*?)```/);
   if (!match) throw new Error("No genome found in post: " + url);
-  return { genome: JSON.parse(match[1].trim()), author, permlink };
+  const genome = JSON.parse(match[1].trim());
+  const elapsed = calculateAge(post.created);
+  return { genome, author, permlink, age: elapsed };
 }
 
 // Convert a raw Steem post array into creature card data objects.
