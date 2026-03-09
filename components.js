@@ -1357,6 +1357,23 @@ const BreedingPanelComponent = {
         this.genomeA = resA.genome;
         this.genomeB = resB.genome;
 
+        // ---- Fertility check ----
+        const checkFertility = (res, label) => {
+          const g   = res.genome;
+          const age = res.age;
+          if (age >= g.LIF) throw new Error(
+            `${label} (${res.author}) is a fossil (age ${age} ≥ lifespan ${g.LIF}). Fossils cannot breed.`
+          );
+          if (age < g.FRT_START) throw new Error(
+            `${label} (${res.author}) is too young to breed (age ${age}, fertile from day ${g.FRT_START}).`
+          );
+          if (age >= g.FRT_END) throw new Error(
+            `${label} (${res.author}) is past breeding age (age ${age}, fertile until day ${g.FRT_END}).`
+          );
+        };
+        checkFertility(resA, "Parent A");
+        checkFertility(resB, "Parent B");
+
         // ---- Kinship check ----
         this.loadStatus = "Checking ancestry and family relationships…";
         await checkBreedingCompatibility(resA, resB);
