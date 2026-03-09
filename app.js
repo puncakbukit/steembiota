@@ -131,17 +131,18 @@ function parseSteembiotaPosts(rawPosts) {
     let meta = {};
     try { meta = JSON.parse(p.json_metadata || "{}"); } catch {}
     if (!meta.steembiota || !meta.steembiota.genome) continue;
-    const sb = meta.steembiota;
+    const sb  = meta.steembiota;
+    const age = calculateAge(p.created);   // live age — days since post was published
     results.push({
-      author:        p.author,
-      permlink:      p.permlink,
-      name:          sb.name || p.author,
-      genome:        sb.genome,
-      age:           sb.age ?? 0,
-      lifecycleStage: getLifecycleStage(sb.age ?? 0, sb.genome),
-      parentA:       sb.parentA || null,
-      parentB:       sb.parentB || null,
-      created:       p.created || ""
+      author:         p.author,
+      permlink:       p.permlink,
+      name:           sb.name || p.author,
+      genome:         sb.genome,
+      age,
+      lifecycleStage: getLifecycleStage(age, sb.genome),
+      parentA:        sb.parentA || null,
+      parentB:        sb.parentB || null,
+      created:        p.created || ""
     });
   }
   results.sort((a, b) => (b.created > a.created ? 1 : -1));
@@ -375,6 +376,16 @@ function generateFullName(g) {
   const species = root + title;
 
   return genus[0].toUpperCase() + genus.slice(1) + " " + species;
+}
+
+// Stable genus name derived from GEN only — all other genes fixed to 0.
+// Gives every genus a consistent identity regardless of individual creature genes.
+function generateGenusName(gen) {
+  const prefix = namePick(NAME_PREFIX, gen);
+  const core   = namePick(NAME_CORE,   0);
+  const ending = namePick(NAME_ENDING, 0);
+  const raw    = prefix + core + ending;
+  return raw[0].toUpperCase() + raw.slice(1);
 }
 
 // ============================================================
@@ -747,7 +758,9 @@ const HomeView = {
       listError:     "",
       listPage:      1,
       filterGenus:   "",       // "" = all, otherwise genus number as string
-      filterSex:     ""        // "" = all, "0" = male, "1" = female
+      filterSex:     "",       // "" = all, "0" = male, "1" = female
+      filterAgeOp:   "",       // "" = off, "<" | "=" | ">"
+      filterAgeVal:  ""        // numeric string
     };
   },
   created() {
@@ -778,12 +791,18 @@ const HomeView = {
     },
     availableGenera() {
       const set = new Set(this.allCreatures.map(c => c.genome.GEN));
-      return [...set].sort((a, b) => a - b);
+      return [...set].sort((a, b) => a - b).map(g => ({ id: g, name: generateGenusName(g) }));
     },
     filteredCreatures() {
+      const ageVal = this.filterAgeVal !== "" ? Number(this.filterAgeVal) : null;
       return this.allCreatures.filter(c => {
         if (this.filterGenus !== "" && c.genome.GEN !== Number(this.filterGenus)) return false;
         if (this.filterSex   !== "" && c.genome.SX  !== Number(this.filterSex))   return false;
+        if (ageVal !== null && !isNaN(ageVal) && this.filterAgeOp !== "") {
+          if (this.filterAgeOp === "<" && !(c.age <  ageVal)) return false;
+          if (this.filterAgeOp === "=" && !(c.age === ageVal)) return false;
+          if (this.filterAgeOp === ">" && !(c.age >  ageVal)) return false;
+        }
         return true;
       });
     },
@@ -796,8 +815,10 @@ const HomeView = {
   watch: {
     age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this.facingRight); },
     feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this.facingRight); },
-    filterGenus() { this.listPage = 1; },
-    filterSex()   { this.listPage = 1; }
+    filterGenus()  { this.listPage = 1; },
+    filterSex()    { this.listPage = 1; },
+    filterAgeOp()  { this.listPage = 1; },
+    filterAgeVal() { this.listPage = 1; }
   },
   methods: {
     async loadCreatureList() {
@@ -828,7 +849,7 @@ const HomeView = {
       if (!this.genome)           { this.notify("Create a creature first.", "error"); return; }
       if (!window.steem_keychain) { this.notify("Steem Keychain is not installed.", "error"); return; }
       this.publishing = true;
-      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, this.customTitle, (response) => {
+      publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, this.customTitle, generateGenusName(this.genome.GEN), (response) => {
         this.publishing = false;
         if (response.success) {
           this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
@@ -840,6 +861,7 @@ const HomeView = {
     },
     prevPage() { if (this.listPage > 1) this.listPage--; },
     nextPage() { if (this.listPage < this.totalPages) this.listPage++; },
+    generateGenusName,
     onFacingResolved(dir) {
       this.facingRight = dir;
       if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, this.feedState, dir);
@@ -861,6 +883,9 @@ const HomeView = {
             style="width:90px;font-size:13px;padding:5px 8px;"
             @keydown.enter="createFounder"
           />
+          <span v-if="genusInputValid && genusInput !== ''" style="font-size:12px;color:#66bb6a;font-style:italic;">
+            {{ generateGenusName(Number(genusInput)) }}
+          </span>
           <button @click="createFounder" :disabled="!genusInputValid">🌱 Create Founder Creature</button>
         </div>
 
@@ -925,7 +950,7 @@ const HomeView = {
             style="padding:5px 8px;font-size:13px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
           >
             <option value="">All genera</option>
-            <option v-for="g in availableGenera" :key="g" :value="String(g)">Genus {{ g }}</option>
+            <option v-for="g in availableGenera" :key="g.id" :value="String(g.id)">{{ g.name }} ({{ g.id }})</option>
           </select>
           <div style="display:flex;gap:4px;">
             <button
@@ -940,6 +965,28 @@ const HomeView = {
               @click="filterSex = '1'"
               :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='1' ? '#880e4f' : '#1a1a1a', color: filterSex==='1' ? '#f48fb1' : '#888', border:'1px solid #333', borderRadius:'6px' }"
             >♀ Female</button>
+          </div>
+          <!-- Age filter -->
+          <div style="display:flex;gap:4px;align-items:center;">
+            <span style="font-size:12px;color:#555;">Age</span>
+            <button
+              v-for="op in ['<','=','>']" :key="op"
+              @click="filterAgeOp = (filterAgeOp === op ? '' : op)"
+              :style="{ padding:'4px 8px', fontSize:'12px', fontFamily:'monospace', background: filterAgeOp===op ? '#4a3000' : '#1a1a1a', color: filterAgeOp===op ? '#ffb74d' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >{{ op }}</button>
+            <input
+              v-model="filterAgeVal"
+              type="number"
+              min="0"
+              placeholder="days"
+              style="width:64px;padding:4px 6px;font-size:12px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
+            />
+            <button
+              v-if="filterAgeOp || filterAgeVal"
+              @click="filterAgeOp=''; filterAgeVal=''"
+              style="padding:4px 7px;font-size:11px;background:#1a1a1a;color:#555;border:1px solid #333;border-radius:6px;"
+              title="Clear age filter"
+            >✕</button>
           </div>
         </div>
 
@@ -1140,7 +1187,9 @@ const ProfileView = {
       loadError:   "",
       listPage:    1,
       filterGenus: "",   // "" = all, otherwise genus number as string
-      filterSex:   ""    // "" = all, "0" = male, "1" = female
+      filterSex:   "",   // "" = all, "0" = male, "1" = female
+      filterAgeOp: "",   // "" = off, "<" | "=" | ">"
+      filterAgeVal: ""   // numeric string
     };
   },
   async created() {
@@ -1159,12 +1208,18 @@ const ProfileView = {
     username()   { return this.$route.params.user; },
     availableGenera() {
       const set = new Set(this.creatures.map(c => c.genome.GEN));
-      return [...set].sort((a, b) => a - b);
+      return [...set].sort((a, b) => a - b).map(g => ({ id: g, name: generateGenusName(g) }));
     },
     filteredCreatures() {
+      const ageVal = this.filterAgeVal !== "" ? Number(this.filterAgeVal) : null;
       return this.creatures.filter(c => {
         if (this.filterGenus !== "" && c.genome.GEN !== Number(this.filterGenus)) return false;
         if (this.filterSex   !== "" && c.genome.SX  !== Number(this.filterSex))   return false;
+        if (ageVal !== null && !isNaN(ageVal) && this.filterAgeOp !== "") {
+          if (this.filterAgeOp === "<" && !(c.age <  ageVal)) return false;
+          if (this.filterAgeOp === "=" && !(c.age === ageVal)) return false;
+          if (this.filterAgeOp === ">" && !(c.age >  ageVal)) return false;
+        }
         return true;
       });
     },
@@ -1175,8 +1230,10 @@ const ProfileView = {
     }
   },
   watch: {
-    filterGenus() { this.listPage = 1; },
-    filterSex()   { this.listPage = 1; }
+    filterGenus()  { this.listPage = 1; },
+    filterSex()    { this.listPage = 1; },
+    filterAgeOp()  { this.listPage = 1; },
+    filterAgeVal() { this.listPage = 1; }
   },
   methods: {
     prevPage() { if (this.listPage > 1) this.listPage--; },
@@ -1210,7 +1267,7 @@ const ProfileView = {
             style="padding:5px 8px;font-size:13px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
           >
             <option value="">All genera</option>
-            <option v-for="g in availableGenera" :key="g" :value="String(g)">Genus {{ g }}</option>
+            <option v-for="g in availableGenera" :key="g.id" :value="String(g.id)">{{ g.name }} ({{ g.id }})</option>
           </select>
           <div style="display:flex;gap:4px;">
             <button
@@ -1225,6 +1282,28 @@ const ProfileView = {
               @click="filterSex = '1'"
               :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='1' ? '#880e4f' : '#1a1a1a', color: filterSex==='1' ? '#f48fb1' : '#888', border:'1px solid #333', borderRadius:'6px' }"
             >♀ Female</button>
+          </div>
+          <!-- Age filter -->
+          <div style="display:flex;gap:4px;align-items:center;">
+            <span style="font-size:12px;color:#555;">Age</span>
+            <button
+              v-for="op in ['<','=','>']" :key="op"
+              @click="filterAgeOp = (filterAgeOp === op ? '' : op)"
+              :style="{ padding:'4px 8px', fontSize:'12px', fontFamily:'monospace', background: filterAgeOp===op ? '#4a3000' : '#1a1a1a', color: filterAgeOp===op ? '#ffb74d' : '#888', border:'1px solid #333', borderRadius:'6px' }"
+            >{{ op }}</button>
+            <input
+              v-model="filterAgeVal"
+              type="number"
+              min="0"
+              placeholder="days"
+              style="width:64px;padding:4px 6px;font-size:12px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
+            />
+            <button
+              v-if="filterAgeOp || filterAgeVal"
+              @click="filterAgeOp=''; filterAgeVal=''"
+              style="padding:4px 7px;font-size:11px;background:#1a1a1a;color:#555;border:1px solid #333;border-radius:6px;"
+              title="Clear age filter"
+            >✕</button>
           </div>
         </div>
 

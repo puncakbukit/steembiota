@@ -915,7 +915,7 @@ const GenomeTableComponent = {
     rows() {
       const g = this.genome;
       return [
-        { key: "Genus ID",           value: g.GEN },
+        { key: "Genus",             value: generateGenusName(g.GEN) + " (GEN " + g.GEN + ")" },
         { key: "Sex",               value: this.sexLabel },
         { key: "Morphology",        value: g.MOR },
         { key: "Appendage Seed",    value: g.APP },
@@ -1459,6 +1459,7 @@ const BreedingPanelComponent = {
         this.childName,
         this.breedInfo,
         this.customTitle,
+        generateGenusName(this.childGenome.GEN),
         (response) => {
           this.publishing = false;
           if (response.success) {
