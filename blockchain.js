@@ -141,6 +141,15 @@ function fetchPostsByTag(tag, limit = 20) {
   );
 }
 
+// Paginated version — use start_author + start_permlink as a cursor.
+// The first result will duplicate the cursor post; callers should slice(1).
+function fetchPostsByTagPaged(tag, limit, startAuthor, startPermlink) {
+  return callWithFallbackAsync(
+    steem.api.getDiscussionsByCreated,
+    [{ tag, limit, start_author: startAuthor, start_permlink: startPermlink }]
+  );
+}
+
 function fetchPostsByUser(username, limit = 50) {
   return callWithFallbackAsync(
     steem.api.getDiscussionsByBlog,

@@ -1673,9 +1673,23 @@ const LeaderboardView = {
     this.loading   = true;
     this.loadError = "";
     try {
-      // Single tag scan — 200 posts gives reasonable coverage
-      const raw  = await fetchPostsByTag("steembiota", 200);
-      const computed = computeLeaderboardEntries(Array.isArray(raw) ? raw : []);
+      // getDiscussionsByCreated has a hard limit of 100 per call.
+      // Fetch two pages using start_author/start_permlink cursor to get ~200 posts.
+      const page1 = await fetchPostsByTag("steembiota", 100);
+      let allRaw = Array.isArray(page1) ? [...page1] : [];
+
+      // Only fetch page 2 if page 1 was full (there may be more)
+      if (allRaw.length === 100) {
+        const last = allRaw[allRaw.length - 1];
+        const page2 = await fetchPostsByTagPaged("steembiota", 100, last.author, last.permlink);
+        if (Array.isArray(page2)) {
+          // The first result of page2 overlaps with the last of page1 — skip it
+          const fresh = page2.slice(1);
+          allRaw = allRaw.concat(fresh);
+        }
+      }
+
+      const computed = computeLeaderboardEntries(allRaw);
 
       if (computed.length === 0) {
         this.entries = [];
