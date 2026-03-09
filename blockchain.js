@@ -199,7 +199,7 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
     "steembiota", "",
     jsonMetadata, permlink,
     ["steembiota", "gaming", "evolution"],
-    callback
+    (response) => callback({ ...response, permlink })
   );
 }
 
@@ -261,7 +261,7 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
     "steembiota", "",
     jsonMetadata, permlink,
     ["steembiota", "gaming", "evolution", "breeding"],
-    callback
+    (response) => callback({ ...response, permlink })
   );
 }
 

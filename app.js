@@ -747,8 +747,12 @@ const HomeView = {
       this.publishing = true;
       publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, this.customTitle, (response) => {
         this.publishing = false;
-        if (response.success) this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
-        else                  this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
+        if (response.success) {
+          this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
+          this.$router.push("/@" + this.username + "/" + response.permlink);
+        } else {
+          this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
+        }
       });
     },
     prevPage() { if (this.listPage > 1) this.listPage--; },
@@ -1559,7 +1563,11 @@ const App = {
     const profileData   = ref(null);
 
     async function loadProfile(user) {
-      if (!user) { profileData.value = null; return; }
+      if (!user) {
+        // No logged-in user — show @steembiota's profile as the site identity
+        profileData.value = await fetchAccount("steembiota");
+        return;
+      }
       profileData.value = await fetchAccount(user);
     }
 
@@ -1572,7 +1580,8 @@ const App = {
 
     onMounted(() => {
       setRPC(0);
-      if (username.value) loadProfile(username.value);
+      // Always load a profile — logged-in user's own, or @steembiota as fallback
+      loadProfile(username.value || "");
       let attempts = 0;
       const interval = setInterval(() => {
         attempts++;
@@ -1615,9 +1624,9 @@ const App = {
 
     function logout() {
       username.value = "";
-      profileData.value = null;
       localStorage.removeItem("steem_user");
       showLoginForm.value = false;
+      loadProfile(""); // fall back to @steembiota
     }
 
     provide("username",    username);
@@ -1679,9 +1688,8 @@ const App = {
       @dismiss="dismissNotification"
     ></app-notification-component>
 
-    <!-- Global profile banner — visible on all pages when logged in -->
+    <!-- Global profile banner — logged-in user, or @steembiota as fallback -->
     <global-profile-banner-component
-      v-if="username"
       :profile-data="profileData"
     ></global-profile-banner-component>
 
