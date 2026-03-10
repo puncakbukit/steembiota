@@ -175,17 +175,16 @@ const UserProfileComponent = {
 const CreatureCanvasComponent = {
   name: "CreatureCanvasComponent",
   props: {
-    genome:    { type: Object,  default: null  },
-    age:       { type: Number,  default: 0     },
-    fossil:    { type: Boolean, default: false },
-    feedState: { type: Object,  default: null  },
-    canvasW:   { type: Number,  default: 400   },
-    canvasH:   { type: Number,  default: 320   }
+    genome:        { type: Object,  default: null  },
+    age:           { type: Number,  default: 0     },
+    fossil:        { type: Boolean, default: false },
+    feedState:     { type: Object,  default: null  },
+    activityState: { type: Object,  default: null  },
+    canvasW:       { type: Number,  default: 400   },
+    canvasH:       { type: Number,  default: 320   }
   },
   emits: ["facing-resolved", "pose-resolved"],
   data() {
-    // Both direction and pose are chosen once at component creation — random,
-    // not genome-derived, so they vary each page load.
     const poses = ["standing", "sitting", "sleeping", "alert", "playful"];
     return {
       facingRight: Math.random() < 0.5,
@@ -193,10 +192,11 @@ const CreatureCanvasComponent = {
     };
   },
   watch: {
-    genome()    { this.$nextTick(() => this.draw()); },
-    age()       { this.$nextTick(() => this.draw()); },
-    fossil()    { this.$nextTick(() => this.draw()); },
-    feedState() { this.$nextTick(() => this.draw()); }
+    genome()        { this.$nextTick(() => this.draw()); },
+    age()           { this.$nextTick(() => this.draw()); },
+    fossil()        { this.$nextTick(() => this.draw()); },
+    feedState()     { this.$nextTick(() => this.draw()); },
+    activityState() { this.$nextTick(() => this.draw()); }
   },
   mounted() {
     this.$emit("facing-resolved", this.facingRight);
@@ -419,6 +419,199 @@ const CreatureCanvasComponent = {
     },
 
     // ----------------------------------------------------------
+    // Derive the creature's current expression from game state.
+    // Returns an expression key used by _drawFace().
+    //
+    // Priority order (highest wins):
+    //   pose override → thriving → happy → content → hungry → sad
+    //   with activity (play/walk) boosting mood one step up.
+    // ----------------------------------------------------------
+    _buildExpression(pose, feedState, activityState) {
+      // Pose always wins for sleeping/alert/playful
+      if (pose === "sleeping") return "sleepy";
+      if (pose === "alert")    return "alert";
+      if (pose === "playful")  return "excited";
+
+      const health   = feedState     ? feedState.healthPct     : null;
+      const moodPct  = activityState ? activityState.moodPct   : 0;
+
+      // Mood boost: play activity bumps happiness by up to 0.25
+      const boost = moodPct * 0.25;
+
+      if (health === null)              return "content";   // no data yet
+      const boosted = Math.min(health + boost, 1.0);
+      if (boosted >= 0.80)              return "thriving";
+      if (boosted >= 0.55)              return "happy";
+      if (boosted >= 0.30)              return "content";
+      if (health  >  0.00)              return "hungry";
+      return "sad";
+    },
+
+    // ----------------------------------------------------------
+    // Draw face expression: eye shape, brow, mouth, extras.
+    // Called after the base eye iris is already drawn so we can
+    // layer expression details on top / beside it.
+    // ----------------------------------------------------------
+    _drawFace(ctx, expression, eyeX, eyeY, eyeR, snoutX, snoutY, hR, hue, sat, lit, sc) {
+      const H1 = this.hsl;
+      ctx.lineCap = "round";
+
+      // ── MOUTH ──────────────────────────────────────────────
+      // Base position: below nose on snout face, centred
+      const mouthX = snoutX - hR * 0.08;
+      const mouthY = snoutY + hR * 0.16;
+      const mW     = hR * 0.28;   // half-width of mouth arc
+
+      ctx.lineWidth   = Math.max(0.8, eyeR * 0.28);
+      ctx.strokeStyle = H1(hue, sat + 5, lit - 35);
+
+      if (expression === "thriving" || expression === "excited") {
+        // Big open smile — wide arc curving strongly upward at ends
+        ctx.beginPath();
+        ctx.moveTo(mouthX - mW, mouthY);
+        ctx.quadraticCurveTo(mouthX, mouthY - hR * 0.22, mouthX + mW, mouthY);
+        ctx.stroke();
+        // Small tongue dot for extra joy
+        ctx.fillStyle = H1((hue + 340) % 360, 60, 72, 0.85);
+        ctx.beginPath();
+        ctx.ellipse(mouthX, mouthY + hR * 0.04, hR * 0.09, hR * 0.07, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+      } else if (expression === "happy") {
+        // Gentle smile
+        ctx.beginPath();
+        ctx.moveTo(mouthX - mW * 0.8, mouthY);
+        ctx.quadraticCurveTo(mouthX, mouthY - hR * 0.14, mouthX + mW * 0.8, mouthY);
+        ctx.stroke();
+
+      } else if (expression === "content" || expression === "alert") {
+        // Neutral straight line — slight upward tilt at right end
+        ctx.beginPath();
+        ctx.moveTo(mouthX - mW * 0.65, mouthY + hR * 0.03);
+        ctx.lineTo(mouthX + mW * 0.65, mouthY - hR * 0.03);
+        ctx.stroke();
+
+      } else if (expression === "hungry") {
+        // Slight frown — corners pulled gently down
+        ctx.beginPath();
+        ctx.moveTo(mouthX - mW * 0.75, mouthY - hR * 0.02);
+        ctx.quadraticCurveTo(mouthX, mouthY + hR * 0.11, mouthX + mW * 0.75, mouthY - hR * 0.02);
+        ctx.stroke();
+
+      } else if (expression === "sad") {
+        // Pronounced frown
+        ctx.beginPath();
+        ctx.moveTo(mouthX - mW * 0.8, mouthY - hR * 0.04);
+        ctx.quadraticCurveTo(mouthX, mouthY + hR * 0.20, mouthX + mW * 0.8, mouthY - hR * 0.04);
+        ctx.stroke();
+
+      } else if (expression === "sleepy") {
+        // Tiny neutral mouth, barely visible
+        ctx.globalAlpha = 0.45;
+        ctx.beginPath();
+        ctx.moveTo(mouthX - mW * 0.45, mouthY);
+        ctx.lineTo(mouthX + mW * 0.45, mouthY);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // ── EYEBROW / BROW LINE ─────────────────────────────────
+      const browY  = eyeY - eyeR * 1.55;
+      const browW  = eyeR * 1.1;
+      ctx.lineWidth   = Math.max(0.7, eyeR * 0.22);
+      ctx.strokeStyle = H1(hue, sat + 5, lit - 28, 0.75);
+
+      if (expression === "thriving" || expression === "excited") {
+        // Both brows raised and arched — ^ shape
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.55, browY + eyeR * 0.18);
+        ctx.quadraticCurveTo(eyeX, browY - eyeR * 0.22, eyeX + browW * 0.55, browY + eyeR * 0.18);
+        ctx.stroke();
+
+      } else if (expression === "happy") {
+        // Relaxed raised brow — gentle upward curve
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.5, browY + eyeR * 0.08);
+        ctx.quadraticCurveTo(eyeX, browY - eyeR * 0.12, eyeX + browW * 0.5, browY + eyeR * 0.08);
+        ctx.stroke();
+
+      } else if (expression === "content") {
+        // Flat neutral brow
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.5, browY);
+        ctx.lineTo(eyeX + browW * 0.5, browY);
+        ctx.stroke();
+
+      } else if (expression === "alert") {
+        // Both brows raised high and straight — wide-eyed look
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.55, browY - eyeR * 0.15);
+        ctx.lineTo(eyeX + browW * 0.55, browY - eyeR * 0.15);
+        ctx.stroke();
+
+      } else if (expression === "hungry") {
+        // Inner brow raised on one side — worried/uncertain
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.5, browY + eyeR * 0.08);
+        ctx.quadraticCurveTo(eyeX + browW * 0.1, browY - eyeR * 0.18, eyeX + browW * 0.5, browY + eyeR * 0.04);
+        ctx.stroke();
+
+      } else if (expression === "sad") {
+        // Both brows angled inward-up — classic sad V shape
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.55, browY + eyeR * 0.15);
+        ctx.quadraticCurveTo(eyeX - browW * 0.1, browY - eyeR * 0.22, eyeX + browW * 0.55, browY + eyeR * 0.05);
+        ctx.stroke();
+
+      } else if (expression === "sleepy") {
+        // Drooped brow covering top quarter of eye
+        ctx.globalAlpha = 0.6;
+        ctx.lineWidth = eyeR * 0.55;
+        ctx.beginPath();
+        ctx.moveTo(eyeX - browW * 0.5, browY + eyeR * 0.55);
+        ctx.quadraticCurveTo(eyeX, browY + eyeR * 0.35, eyeX + browW * 0.5, browY + eyeR * 0.55);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // ── EXTRA SPARKLES for thriving ────────────────────────
+      if (expression === "thriving" || expression === "excited") {
+        const sparkHue = (hue + 60) % 360;
+        ctx.fillStyle   = H1(sparkHue, 100, 90, 0.9);
+        ctx.strokeStyle = H1(sparkHue, 80,  70, 0.6);
+        ctx.lineWidth   = 0.6;
+        // Two small star glints beside the eye
+        for (const [sx, sy, sr] of [
+          [eyeX + eyeR * 1.5, eyeY - eyeR * 1.1, eyeR * 0.22],
+          [eyeX + eyeR * 0.9, eyeY - eyeR * 1.6, eyeR * 0.14],
+        ]) {
+          ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+        }
+      }
+
+      // ── TEARDROP for sad ───────────────────────────────────
+      if (expression === "sad") {
+        ctx.fillStyle = H1(200, 80, 72, 0.7);
+        ctx.beginPath();
+        ctx.ellipse(eyeX + eyeR * 0.55, eyeY + eyeR * 1.05,
+                    eyeR * 0.14, eyeR * 0.22, 0.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ── ROSY CHEEKS for thriving ───────────────────────────
+      if (expression === "thriving") {
+        ctx.fillStyle = H1((hue + 330) % 360, 70, 68, 0.22);
+        ctx.beginPath();
+        ctx.ellipse(snoutX + hR * 0.08, snoutY - hR * 0.05,
+                    hR * 0.28, hR * 0.18, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.lineCap = "butt";
+    },
+
+    // ----------------------------------------------------------
     // Draw a single leg + paw (standard upright)
     // ----------------------------------------------------------
     _drawLeg(ctx, p, sc, x, y, hue, sat, lit, behind) {
@@ -565,6 +758,9 @@ const CreatureCanvasComponent = {
       // Pose is chosen randomly at mount — stable for this component instance.
       const pose = (!p.fossil && this.pose) ? this.pose : "standing";
       const pt   = this.buildPoseTransform(pose, p, sc, W, H);
+
+      // Expression derived from game state — drives face drawing.
+      const expression = this._buildExpression(pose, this.feedState, this.activityState);
 
       const ox = W * 0.46;
       const oy = H * 0.52 + pt.oyDelta;
@@ -816,8 +1012,10 @@ const CreatureCanvasComponent = {
         ctx.stroke();
         ctx.lineCap = "butt";
       } else {
+        // Alert: slightly wider eye for the alert expression
+        const alertScale = (expression === "alert") ? 1.15 : 1.0;
         const irisGr = this.radGrad(ctx,
-          eyeX - eyeR * 0.2, eyeY - eyeR * 0.2, 0, eyeR,
+          eyeX - eyeR * 0.2, eyeY - eyeR * 0.2, 0, eyeR * alertScale,
           [
             [0,   H1((hue + 120) % 360, 70, 75)],
             [0.6, H1((hue + 90)  % 360, 80, 50)],
@@ -825,15 +1023,25 @@ const CreatureCanvasComponent = {
           ]
         );
         ctx.fillStyle = irisGr;
-        ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR * alertScale, 0, Math.PI * 2); ctx.fill();
+        // Pupil — shifted down slightly when sad/hungry, normal otherwise
+        const pupilDY = (expression === "sad" || expression === "hungry") ? eyeR * 0.14 : 0;
         ctx.fillStyle = "#0a0a14";
-        ctx.beginPath(); ctx.ellipse(eyeX + eyeR * 0.05, eyeY, eyeR * 0.42, eyeR * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(eyeX + eyeR * 0.05, eyeY + pupilDY,
+                                     eyeR * 0.42, eyeR * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+        // Highlights
         ctx.fillStyle = "rgba(255,255,255,0.88)";
         ctx.beginPath(); ctx.arc(eyeX - eyeR * 0.28, eyeY - eyeR * 0.28, eyeR * 0.22, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = "rgba(255,255,255,0.35)";
         ctx.beginPath(); ctx.arc(eyeX + eyeR * 0.2, eyeY + eyeR * 0.15, eyeR * 0.12, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = H1(hue, sat, lit - 25); ctx.lineWidth = 0.8;
-        ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR * alertScale, 0, Math.PI * 2); ctx.stroke();
+      }
+
+      // ---- FACE EXPRESSION (brow + mouth + extras) ----
+      // Only show on creatures old enough to have a visible face (toddler+)
+      if (p.pct >= 0.05) {
+        this._drawFace(ctx, expression, eyeX, eyeY, eyeR, snoutX, snoutY, hR, hue, sat, lit, sc);
       }
 
       // ---- DORSAL WING / FIN ----
