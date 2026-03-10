@@ -1879,7 +1879,9 @@ const ActivityPanelComponent = {
         else if (moodPct >= 0.55) moodLabel = "Playful";
         else if (moodPct >= 0.30) moodLabel = "Cheerful";
         else if (moodPct >  0.00) moodLabel = "Content";
-        updated = { ...s, playTotal, playOwner, playCommunity, moodPct, moodLabel, fertilityExtension };
+        updated = { ...s, playTotal, playOwner, playCommunity, moodPct, moodLabel, fertilityExtension,
+                    alreadyPlayedToday: true,
+                    alreadyWalkedToday: s.alreadyWalkedToday || false };
       } else {
         const walkTotal = s.walkTotal + 1;
         const walkOwner = isOwner ? s.walkOwner + 1 : s.walkOwner;
@@ -1892,7 +1894,9 @@ const ActivityPanelComponent = {
         else if (vitalityPct >= 0.55) vitalityLabel = "Active";
         else if (vitalityPct >= 0.30) vitalityLabel = "Lively";
         else if (vitalityPct >  0.00) vitalityLabel = "Stirring";
-        updated = { ...s, walkTotal, walkOwner, walkCommunity, vitalityPct, vitalityLabel, vitalityLifespanBonus };
+        updated = { ...s, walkTotal, walkOwner, walkCommunity, vitalityPct, vitalityLabel, vitalityLifespanBonus,
+                    alreadyWalkedToday: true,
+                    alreadyPlayedToday: s.alreadyPlayedToday || false };
       }
       this.activityState = updated;
       this.$emit("activity-state-updated", updated);
