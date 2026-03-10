@@ -1353,7 +1353,6 @@ const ActivityPanelComponent = {
       }
     }
   },
-  },
   computed: {
     canPlay() {
       return !!this.username && !!this.creatureAuthor && !this.publishingPlay &&
