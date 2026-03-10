@@ -182,11 +182,15 @@ const CreatureCanvasComponent = {
     canvasW:   { type: Number,  default: 400   },
     canvasH:   { type: Number,  default: 320   }
   },
-  emits: ["facing-resolved"],
+  emits: ["facing-resolved", "pose-resolved"],
   data() {
-    // Direction is chosen once at component creation — purely random,
-    // not derived from the genome so it varies each time the page loads.
-    return { facingRight: Math.random() < 0.5 };
+    // Both direction and pose are chosen once at component creation — random,
+    // not genome-derived, so they vary each page load.
+    const poses = ["standing", "sitting", "sleeping", "alert", "playful"];
+    return {
+      facingRight: Math.random() < 0.5,
+      pose: poses[Math.floor(Math.random() * poses.length)]
+    };
   },
   watch: {
     genome()    { this.$nextTick(() => this.draw()); },
@@ -196,6 +200,7 @@ const CreatureCanvasComponent = {
   },
   mounted() {
     this.$emit("facing-resolved", this.facingRight);
+    this.$emit("pose-resolved", this.pose);
     this.draw();
   },
   methods: {
@@ -307,6 +312,200 @@ const CreatureCanvasComponent = {
     },
 
     // ----------------------------------------------------------
+    // Build pose-specific transform data.
+    // Each pose returns overrides applied on top of standard anchors.
+    // ----------------------------------------------------------
+    buildPoseTransform(pose, p, sc, W, H) {
+      const base = {
+        oyDelta: 0, headDX: 0, headDY: 0,
+        neckAngle: 0, tailUp: 0, tailCurlMul: 1, tailWrap: false,
+        legOverride: null, eyeClosed: false, shadowScale: 1,
+      };
+
+      if (pose === "standing") return base;
+
+      if (pose === "alert") {
+        return {
+          ...base,
+          oyDelta:    -4 * sc,
+          headDX:     2  * sc,
+          headDY:    -10 * sc,
+          neckAngle:  0.4,
+          tailUp:     0.85,
+          tailCurlMul: 0.3,
+          shadowScale: 0.9,
+        };
+      }
+
+      if (pose === "playful") {
+        return {
+          ...base,
+          oyDelta:    6 * sc,
+          headDX:    -8 * sc,
+          headDY:    12 * sc,
+          neckAngle: -0.5,
+          tailUp:    1.0,
+          tailCurlMul: 0.5,
+          shadowScale: 1.1,
+          legOverride: (ctx, pp, s, ox, oy, hue, sat, lit) => {
+            // Back legs behind — standard
+            this._drawLeg(ctx, pp, s,
+              ox + pp.bodyLen * s * 0.52, oy + pp.bodyH * s * 0.55,
+              hue, sat - 8, lit - 10, true);
+            this._drawLeg(ctx, pp, s,
+              ox - pp.bodyLen * s * 0.18, oy + pp.bodyH * s * 0.55,
+              hue, sat - 8, lit - 10, true);
+            // Front legs stretched forward and down (play-bow)
+            this._drawLegPose(ctx, pp, s,
+              ox - pp.bodyLen * s * 0.12, oy + pp.bodyH * s * 0.65,
+              hue, sat, lit, false, "stretched");
+            this._drawLegPose(ctx, pp, s,
+              ox - pp.bodyLen * s * 0.46, oy + pp.bodyH * s * 0.65,
+              hue, sat, lit, false, "stretched");
+          }
+        };
+      }
+
+      if (pose === "sitting") {
+        return {
+          ...base,
+          oyDelta:    10 * sc,
+          headDX:     4  * sc,
+          headDY:    -8  * sc,
+          neckAngle:  0.3,
+          tailUp:     0.0,
+          tailCurlMul: 1.6,
+          tailWrap:   true,
+          shadowScale: 1.2,
+          legOverride: (ctx, pp, s, ox, oy, hue, sat, lit) => {
+            // Back legs: folded haunches
+            this._drawHaunch(ctx, pp, s,
+              ox + pp.bodyLen * s * 0.42, oy + pp.bodyH * s * 0.5,
+              hue, sat - 8, lit - 10, true);
+            this._drawHaunch(ctx, pp, s,
+              ox - pp.bodyLen * s * 0.08, oy + pp.bodyH * s * 0.5,
+              hue, sat - 8, lit - 10, false);
+            // Front legs straight down
+            this._drawLeg(ctx, pp, s,
+              ox - pp.bodyLen * s * 0.32, oy + pp.bodyH * s * 0.65,
+              hue, sat, lit, false);
+            this._drawLeg(ctx, pp, s,
+              ox - pp.bodyLen * s * 0.58, oy + pp.bodyH * s * 0.65,
+              hue, sat, lit, false);
+          }
+        };
+      }
+
+      if (pose === "sleeping") {
+        return {
+          ...base,
+          oyDelta:    28 * sc,
+          headDX:     0,
+          headDY:     18 * sc,
+          neckAngle: -0.8,
+          tailUp:    -0.3,
+          tailCurlMul: 2.0,
+          tailWrap:   true,
+          eyeClosed:  true,
+          shadowScale: 1.3,
+          legOverride: (ctx, pp, s, ox, oy, hue, sat, lit) => {
+            const tuckY = oy + pp.bodyH * s * 0.55;
+            this._drawTuckedLegs(ctx, pp, s, ox, tuckY, hue, sat, lit);
+          }
+        };
+      }
+
+      return base;
+    },
+
+    // ----------------------------------------------------------
+    // Draw a stretched/angled leg (play-bow front legs)
+    // ----------------------------------------------------------
+    _drawLegPose(ctx, p, sc, x, y, hue, sat, lit, behind, style) {
+      const lLen = p.legLen * sc * (style === "stretched" ? 1.25 : 1.0);
+      const lW   = p.legThick * sc;
+      const alpha = behind ? 0.62 : 1.0;
+      ctx.globalAlpha = alpha;
+
+      const angle = style === "stretched" ? 0.55 : 0;
+      const dx = Math.sin(angle) * lLen;
+      const dy = Math.cos(angle) * lLen;
+
+      const legGr = this.linGrad(ctx, x, y, x - dx + lW * 0.3, y + dy,
+        [[0, this.hsl(hue, sat - 5, lit - 5)], [1, this.hsl(hue, sat - 10, lit - 14)]]
+      );
+      ctx.fillStyle   = legGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - lW * 0.5, y);
+      ctx.quadraticCurveTo(x - lW * 0.7 - dx * 0.5, y + dy * 0.5, x - lW * 0.3 - dx, y + dy * 0.72);
+      ctx.lineTo(x + lW * 0.3 - dx, y + dy * 0.72);
+      ctx.quadraticCurveTo(x + lW * 0.7 - dx * 0.5, y + dy * 0.5, x + lW * 0.5, y);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      ctx.fillStyle   = this.hsl(hue, sat - 15, lit + 10);
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(x - dx, y + dy * 0.74, lW * 0.85, lW * 0.48, angle, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
+    // Draw a folded haunch (sitting rear leg)
+    // ----------------------------------------------------------
+    _drawHaunch(ctx, p, sc, x, y, hue, sat, lit, behind) {
+      const alpha = behind ? 0.62 : 1.0;
+      const rX = p.legLen * sc * 0.48;
+      const rY = p.legThick * sc * 1.1;
+      ctx.globalAlpha = alpha;
+
+      const gr = this.linGrad(ctx, x - rX, y, x + rX, y + rY * 2,
+        [[0, this.hsl(hue, sat - 5, lit - 8)], [1, this.hsl(hue, sat - 10, lit - 16)]]
+      );
+      ctx.fillStyle   = gr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 20);
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.ellipse(x, y + rY, rX, rY, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // Paw poking out front
+      ctx.fillStyle   = this.hsl(hue, sat - 15, lit + 10);
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(x - rX * 0.7, y + rY * 1.6, rX * 0.55, rY * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
+    // Draw all four legs tucked flat (sleeping)
+    // ----------------------------------------------------------
+    _drawTuckedLegs(ctx, p, sc, ox, y, hue, sat, lit) {
+      const positions = [
+        { x: ox + p.bodyLen * sc * 0.45, behind: true  },
+        { x: ox - p.bodyLen * sc * 0.10, behind: true  },
+        { x: ox - p.bodyLen * sc * 0.30, behind: false },
+        { x: ox - p.bodyLen * sc * 0.55, behind: false },
+      ];
+      for (const pos of positions) {
+        ctx.globalAlpha = pos.behind ? 0.55 : 0.85;
+        ctx.fillStyle   = this.hsl(hue, sat - 8, lit - 10);
+        ctx.strokeStyle = this.hsl(hue, sat, lit - 20);
+        ctx.lineWidth   = 0.8;
+        ctx.beginPath();
+        ctx.ellipse(pos.x, y, p.legThick * sc * 1.0, p.legThick * sc * 0.55, 0, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
     // Main draw
     // ----------------------------------------------------------
     draw() {
@@ -316,7 +515,6 @@ const CreatureCanvasComponent = {
       const W = canvas.width, H = canvas.height;
       ctx.clearRect(0, 0, W, H);
 
-      // Mirror the entire canvas when facing right — no drawing code changes needed.
       if (this.facingRight) {
         ctx.save();
         ctx.translate(W, 0);
@@ -327,10 +525,12 @@ const CreatureCanvasComponent = {
       const p = this.buildPhenotype(g, this.age, this.feedState);
       const sc = p.bodyScale;
 
-      // Creature is drawn in side-profile facing left.
-      // Pivot point: centre of torso.
-      const ox = W * 0.46;   // torso centre x (shifted left so tail fits)
-      const oy = H * 0.52;   // torso centre y
+      // Pose is chosen randomly at mount — stable for this component instance.
+      const pose = (!p.fossil && this.pose) ? this.pose : "standing";
+      const pt   = this.buildPoseTransform(pose, p, sc, W, H);
+
+      const ox = W * 0.46;
+      const oy = H * 0.52 + pt.oyDelta;
 
       const H1  = this.hsl;
       const hue = p.finalHue;
@@ -363,12 +563,13 @@ const CreatureCanvasComponent = {
       // ---- SHADOW ----
       const shadowY  = oy + p.bodyH * sc + p.legLen * sc * 0.85;
       const shadowGr = this.radGrad(ctx, ox, shadowY, 0, p.bodyLen * sc * 0.9, [
-        [0,   `hsla(0,0%,0%,0.18)`],
-        [1,   `hsla(0,0%,0%,0)`],
+        [0, `hsla(0,0%,0%,0.18)`], [1, `hsla(0,0%,0%,0)`],
       ]);
       ctx.fillStyle = shadowGr;
       ctx.beginPath();
-      ctx.ellipse(ox, shadowY, p.bodyLen * sc * 0.85, 7 * sc, 0, 0, Math.PI * 2);
+      ctx.ellipse(ox, shadowY,
+        p.bodyLen * sc * 0.85 * pt.shadowScale,
+        7 * sc * pt.shadowScale, 0, 0, Math.PI * 2);
       ctx.fill();
 
       // ---- ENERGY RIBBONS (behind body) ----
@@ -382,12 +583,9 @@ const CreatureCanvasComponent = {
           const ctrl2y = oy + yOff + (ribRng() - 0.5) * 40;
           const endX   = ctrl2x + 20 + ribRng() * 40;
           const endY   = ctrl2y + (ribRng() - 0.5) * 30;
-          const alpha  = 0.55 + ribRng() * 0.35;
-          const w      = (2 + ribRng() * 3) * p.ornamentScale;
-
-          ctx.globalAlpha = alpha * p.ornamentScale;
+          ctx.globalAlpha = (0.55 + ribRng() * 0.35) * p.ornamentScale;
           ctx.strokeStyle = H1((p.orbHue + r * 20) % 360, sat + 30, lit + 30);
-          ctx.lineWidth   = w * sc;
+          ctx.lineWidth   = (2 + ribRng() * 3) * p.ornamentScale * sc;
           ctx.lineCap     = "round";
           ctx.beginPath();
           ctx.moveTo(ox + p.bodyLen * sc * 0.6, oy + yOff);
@@ -397,31 +595,41 @@ const CreatureCanvasComponent = {
         ctx.globalAlpha = 1; ctx.lineCap = "butt";
       }
 
-      // ---- BACK LEGS (behind body, slightly muted) ----
-      this._drawLeg(ctx, p, sc, ox + p.bodyLen * sc * 0.52, oy + p.bodyH * sc * 0.55,
-                    hue, sat - 8, lit - 10, true);
-      this._drawLeg(ctx, p, sc, ox - p.bodyLen * sc * 0.18, oy + p.bodyH * sc * 0.55,
-                    hue, sat - 8, lit - 10, true);
+      // ---- LEGS ----
+      if (pt.legOverride) {
+        pt.legOverride(ctx, p, sc, ox, oy, hue, sat, lit);
+      } else {
+        // Standard standing legs
+        this._drawLeg(ctx, p, sc, ox + p.bodyLen * sc * 0.52, oy + p.bodyH * sc * 0.55,
+                      hue, sat - 8, lit - 10, true);
+        this._drawLeg(ctx, p, sc, ox - p.bodyLen * sc * 0.18, oy + p.bodyH * sc * 0.55,
+                      hue, sat - 8, lit - 10, true);
+        this._drawLeg(ctx, p, sc, ox + p.bodyLen * sc * 0.42, oy + p.bodyH * sc * 0.6,
+                      hue, sat, lit, false);
+        this._drawLeg(ctx, p, sc, ox - p.bodyLen * sc * 0.08, oy + p.bodyH * sc * 0.6,
+                      hue, sat, lit, false);
+      }
 
       // ---- TAIL ----
-      this._drawTail(ctx, p, sc, ox, oy, hue, sat, lit);
+      if (pt.tailWrap) {
+        this._drawTailWrap(ctx, p, sc, ox, oy, hue, sat, lit, pt);
+      } else {
+        this._drawTailPosed(ctx, p, sc, ox, oy, hue, sat, lit, pt);
+      }
 
       // ---- TORSO ----
-      // Underbelly gradient
       const torsoGr = this.linGrad(ctx,
-        ox, oy - p.bodyH * sc,
-        ox, oy + p.bodyH * sc,
+        ox, oy - p.bodyH * sc, ox, oy + p.bodyH * sc,
         [
           [0,   H1(hue, sat - 5,  lit - 8)],
           [0.4, H1(hue, sat,      lit)],
-          [1,   H1(hue, sat - 12, lit + 14)], // lighter belly
+          [1,   H1(hue, sat - 12, lit + 14)],
         ]
       );
       ctx.fillStyle   = torsoGr;
       ctx.strokeStyle = H1(hue, sat, lit - 18);
       ctx.lineWidth   = 1.8;
       ctx.beginPath();
-      // Slightly longer horizontally than tall — fox-like torso
       ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, -0.08, 0, Math.PI * 2);
       ctx.fill(); ctx.stroke();
 
@@ -432,8 +640,7 @@ const CreatureCanvasComponent = {
         ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, -0.08, 0, Math.PI * 2);
         ctx.clip();
         const chestGr = this.radGrad(ctx,
-          ox - p.bodyLen * sc * 0.35, oy,
-          0, p.bodyLen * sc * 0.45,
+          ox - p.bodyLen * sc * 0.35, oy, 0, p.bodyLen * sc * 0.45,
           [
             [0,   H1(hue, sat - 20, lit + 28, 0.65)],
             [0.6, H1(hue, sat - 10, lit + 14, 0.25)],
@@ -455,41 +662,32 @@ const CreatureCanvasComponent = {
         ctx.fillStyle   = H1((hue + 35) % 360, sat + 10, lit + 20);
         const patRng = this.makePrng(g.ORN + 77);
         if (p.patternType === 1) {
-          // subtle spots
           for (let i = 0; i < 10; i++) {
             const sx = ox + (patRng() - 0.5) * p.bodyLen * sc * 1.6;
             const sy = oy + (patRng() - 0.5) * p.bodyH * sc * 1.6;
-            const sr = (3 + patRng() * 6) * sc;
-            ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(sx, sy, (3 + patRng() * 6) * sc, 0, Math.PI * 2); ctx.fill();
           }
         } else {
-          // dapple — large soft blobs
           for (let i = 0; i < 5; i++) {
             const sx = ox + (patRng() - 0.5) * p.bodyLen * sc * 1.2;
             const sy = oy + (patRng() - 0.5) * p.bodyH * sc;
             ctx.beginPath();
-            ctx.ellipse(sx, sy, (8 + patRng() * 14) * sc, (5 + patRng() * 10) * sc, patRng() * Math.PI, 0, Math.PI * 2);
+            ctx.ellipse(sx, sy, (8 + patRng() * 14) * sc, (5 + patRng() * 10) * sc,
+                        patRng() * Math.PI, 0, Math.PI * 2);
             ctx.fill();
           }
         }
         ctx.restore(); ctx.globalAlpha = 1;
       }
 
-      // ---- FRONT LEGS (in front of body) ----
-      this._drawLeg(ctx, p, sc, ox + p.bodyLen * sc * 0.42, oy + p.bodyH * sc * 0.6,
-                    hue, sat, lit, false);
-      this._drawLeg(ctx, p, sc, ox - p.bodyLen * sc * 0.08, oy + p.bodyH * sc * 0.6,
-                    hue, sat, lit, false);
-
       // ---- NECK ----
-      const headX = ox - p.bodyLen * sc * 0.68;
-      const headY = oy - p.bodyH * sc * 0.35;
-      const neckGr = this.linGrad(ctx, ox - p.bodyLen * sc * 0.5, oy - p.bodyH * sc * 0.1,
-                                  headX, headY + p.headSize * sc * 0.4,
-        [
-          [0,   H1(hue, sat - 5, lit - 5)],
-          [1,   H1(hue, sat,     lit)],
-        ]
+      const headX = ox - p.bodyLen * sc * 0.68 + pt.headDX;
+      const headY = oy - p.bodyH  * sc * 0.35  + pt.headDY;
+      const neckCtrlY = oy - p.bodyH * sc * (0.2 - pt.neckAngle * 0.35);
+      const neckGr = this.linGrad(ctx,
+        ox - p.bodyLen * sc * 0.5, oy - p.bodyH * sc * 0.1,
+        headX, headY + p.headSize * sc * 0.4,
+        [[0, H1(hue, sat - 5, lit - 5)], [1, H1(hue, sat, lit)]]
       );
       ctx.fillStyle   = neckGr;
       ctx.strokeStyle = H1(hue, sat, lit - 18);
@@ -497,7 +695,7 @@ const CreatureCanvasComponent = {
       ctx.beginPath();
       ctx.moveTo(ox - p.bodyLen * sc * 0.42, oy - p.bodyH * sc * 0.5);
       ctx.quadraticCurveTo(
-        ox - p.bodyLen * sc * 0.58, oy - p.bodyH * sc * 0.2,
+        ox - p.bodyLen * sc * 0.58, neckCtrlY,
         headX + p.headSize * sc * 0.55, headY + p.headSize * sc * 0.5
       );
       ctx.quadraticCurveTo(
@@ -513,11 +711,11 @@ const CreatureCanvasComponent = {
         ctx.strokeStyle = H1(hue, sat - 10, lit + 22);
         ctx.lineCap = "round";
         for (let i = 0; i < 7; i++) {
-          const t      = i / 6;
-          const mx     = ox - p.bodyLen * sc * (0.45 + t * 0.28);
-          const my     = oy - p.bodyH * sc * (0.55 + t * 0.15);
-          const len    = (8 + maneRng() * 12) * sc * p.ornamentScale;
-          const angle  = -0.4 - maneRng() * 0.5;
+          const t     = i / 6;
+          const mx    = ox - p.bodyLen * sc * (0.45 + t * 0.28) + pt.headDX * t;
+          const my    = oy - p.bodyH  * sc * (0.55 + t * 0.15)  + pt.headDY * t;
+          const len   = (8 + maneRng() * 12) * sc * p.ornamentScale;
+          const angle = -0.4 - maneRng() * 0.5 + pt.neckAngle * 0.2;
           ctx.globalAlpha = 0.55 + maneRng() * 0.3;
           ctx.lineWidth   = (1.5 + maneRng() * 2) * sc;
           ctx.beginPath();
@@ -530,8 +728,8 @@ const CreatureCanvasComponent = {
 
       // ---- HEAD ----
       const hR = p.headSize * sc;
-      // Head gradient — lighter face, darker crown
-      const headGr = this.radGrad(ctx, headX - hR * 0.15, headY + hR * 0.2, hR * 0.1, hR * 1.1,
+      const headGr = this.radGrad(ctx,
+        headX - hR * 0.15, headY + hR * 0.2, hR * 0.1, hR * 1.1,
         [
           [0,   H1(hue, sat - 18, lit + 22)],
           [0.5, H1(hue, sat,      lit)],
@@ -562,36 +760,45 @@ const CreatureCanvasComponent = {
       ctx.fill();
 
       // ---- EARS ----
-      this._drawEar(ctx, p, sc, headX, headY, hue, sat, lit, -1, false); // back ear
-      this._drawEar(ctx, p, sc, headX, headY, hue, sat, lit,  1, true);  // front ear
+      this._drawEar(ctx, p, sc, headX, headY, hue, sat, lit, -1, false);
+      this._drawEar(ctx, p, sc, headX, headY, hue, sat, lit,  1, true);
 
       // ---- EYE ----
       const eyeX = headX - hR * 0.28;
       const eyeY = headY - hR * 0.14;
       const eyeR = p.eyeRadius * sc;
-      // Iris
-      const irisGr = this.radGrad(ctx, eyeX - eyeR * 0.2, eyeY - eyeR * 0.2, 0, eyeR,
-        [
-          [0,   H1((hue + 120) % 360, 70, 75)],
-          [0.6, H1((hue + 90)  % 360, 80, 50)],
-          [1,   H1((hue + 60)  % 360, 60, 25)],
-        ]
-      );
-      ctx.fillStyle = irisGr;
-      ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
-      // Pupil
-      ctx.fillStyle = "#0a0a14";
-      ctx.beginPath(); ctx.ellipse(eyeX + eyeR * 0.05, eyeY, eyeR * 0.42, eyeR * 0.62, 0, 0, Math.PI * 2); ctx.fill();
-      // Highlights
-      ctx.fillStyle = "rgba(255,255,255,0.88)";
-      ctx.beginPath(); ctx.arc(eyeX - eyeR * 0.28, eyeY - eyeR * 0.28, eyeR * 0.22, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.35)";
-      ctx.beginPath(); ctx.arc(eyeX + eyeR * 0.2, eyeY + eyeR * 0.15, eyeR * 0.12, 0, Math.PI * 2); ctx.fill();
-      // Outline
-      ctx.strokeStyle = H1(hue, sat, lit - 25); ctx.lineWidth = 0.8;
-      ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.stroke();
 
-      // ---- DORSAL WING / FIN (if present) ----
+      if (pt.eyeClosed) {
+        // Sleeping — simple curved closed-eye line
+        ctx.strokeStyle = H1(hue, sat, lit - 25);
+        ctx.lineWidth   = eyeR * 0.55;
+        ctx.lineCap     = "round";
+        ctx.beginPath();
+        ctx.arc(eyeX, eyeY, eyeR * 0.72, Math.PI * 0.15, Math.PI * 0.85);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      } else {
+        const irisGr = this.radGrad(ctx,
+          eyeX - eyeR * 0.2, eyeY - eyeR * 0.2, 0, eyeR,
+          [
+            [0,   H1((hue + 120) % 360, 70, 75)],
+            [0.6, H1((hue + 90)  % 360, 80, 50)],
+            [1,   H1((hue + 60)  % 360, 60, 25)],
+          ]
+        );
+        ctx.fillStyle = irisGr;
+        ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#0a0a14";
+        ctx.beginPath(); ctx.ellipse(eyeX + eyeR * 0.05, eyeY, eyeR * 0.42, eyeR * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.88)";
+        ctx.beginPath(); ctx.arc(eyeX - eyeR * 0.28, eyeY - eyeR * 0.28, eyeR * 0.22, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.35)";
+        ctx.beginPath(); ctx.arc(eyeX + eyeR * 0.2, eyeY + eyeR * 0.15, eyeR * 0.12, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = H1(hue, sat, lit - 25); ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2); ctx.stroke();
+      }
+
+      // ---- DORSAL WING / FIN ----
       if (p.hasWings && p.ornamentScale > 0.35) {
         const wS = p.wingSpan * sc * p.ornamentScale;
         const wx = ox - p.bodyLen * sc * 0.1;
@@ -609,7 +816,7 @@ const CreatureCanvasComponent = {
         ctx.globalAlpha = 1;
       }
 
-      // ---- GLOWING ORB NODES on tail ----
+      // ---- GLOWING ORB NODES ----
       if (p.ornamentScale > 0.4) {
         this._drawOrbNodes(ctx, p, sc, ox, oy, g);
       }
@@ -618,78 +825,36 @@ const CreatureCanvasComponent = {
       if (p.fertile) {
         ctx.globalAlpha = 0.14;
         const aura = this.radGrad(ctx, ox, oy, p.bodyLen * sc * 0.3, p.bodyLen * sc * 1.6,
-          [
-            [0, H1((hue + 60) % 360, 100, 85)],
-            [1, H1(hue, 60, 50, 0)],
-          ]
+          [[0, H1((hue + 60) % 360, 100, 85)], [1, H1(hue, 60, 50, 0)]]
         );
         ctx.fillStyle = aura;
         ctx.beginPath(); ctx.arc(ox, oy, p.bodyLen * sc * 1.6, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
       }
 
-      // Restore mirror transform if applied.
       if (this.facingRight) ctx.restore();
     },
 
     // ----------------------------------------------------------
-    // Draw a single leg + paw
+    // Tail variants
     // ----------------------------------------------------------
-    _drawLeg(ctx, p, sc, x, y, hue, sat, lit, behind) {
-      const lLen = p.legLen * sc;
-      const lW   = p.legThick * sc;
-      const alpha = behind ? 0.62 : 1.0;
-      ctx.globalAlpha = alpha;
-
-      // Upper leg
-      const legGr = this.linGrad(ctx, x, y, x + lW * 0.3, y + lLen * 0.6,
-        [
-          [0, this.hsl(hue, sat - 5, lit - 5)],
-          [1, this.hsl(hue, sat - 10, lit - 14)],
-        ]
-      );
-      ctx.fillStyle   = legGr;
-      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
-      ctx.lineWidth   = 1;
-      ctx.beginPath();
-      ctx.moveTo(x - lW * 0.5, y);
-      ctx.quadraticCurveTo(x - lW * 0.7, y + lLen * 0.5, x - lW * 0.3, y + lLen * 0.7);
-      ctx.lineTo(x + lW * 0.3, y + lLen * 0.7);
-      ctx.quadraticCurveTo(x + lW * 0.7, y + lLen * 0.5, x + lW * 0.5, y);
-      ctx.closePath();
-      ctx.fill(); ctx.stroke();
-
-      // Paw
-      ctx.fillStyle   = this.hsl(hue, sat - 15, lit + 10);
-      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
-      ctx.lineWidth   = 0.8;
-      ctx.beginPath();
-      ctx.ellipse(x, y + lLen * 0.72, lW * 0.72, lW * 0.42, 0, 0, Math.PI * 2);
-      ctx.fill(); ctx.stroke();
-
-      ctx.globalAlpha = 1;
-    },
-
-    // ----------------------------------------------------------
-    // Draw tail with flowing shape
-    // ----------------------------------------------------------
-    _drawTail(ctx, p, sc, ox, oy, hue, sat, lit) {
+    _drawTailPosed(ctx, p, sc, ox, oy, hue, sat, lit, pt) {
       const tX0 = ox + p.bodyLen * sc * 0.82;
       const tY0 = oy - p.bodyH * sc * 0.08;
-      const curl = p.tailCurve;
+      const curl = p.tailCurve * pt.tailCurlMul;
+      const upShift = pt.tailUp * p.bodyH * sc * 1.5;
 
       const cp1x = tX0 + 32 * sc;
-      const cp1y = tY0 - 30 * sc * curl;
+      const cp1y = tY0 - 30 * sc * curl - upShift * 0.4;
       const cp2x = tX0 + 65 * sc;
-      const cp2y = tY0 - 55 * sc * curl;
+      const cp2y = tY0 - 55 * sc * curl - upShift * 0.8;
       const endX = tX0 + 55 * sc;
-      const endY = tY0 - 78 * sc * curl;
+      const endY = tY0 - 78 * sc * curl - upShift;
 
-      // Base tail shape — fluffy
       const tailGr = this.linGrad(ctx, tX0, tY0, endX, endY,
         [
-          [0,   this.hsl(hue, sat - 5,  lit - 8)],
-          [0.5, this.hsl(hue, sat,      lit + 4)],
+          [0,   this.hsl(hue, sat - 5, lit - 8)],
+          [0.5, this.hsl(hue, sat, lit + 4)],
           [1,   this.hsl((hue + 30) % 360, sat + 15, lit + 18)],
         ]
       );
@@ -703,7 +868,6 @@ const CreatureCanvasComponent = {
       ctx.closePath();
       ctx.fill(); ctx.stroke();
 
-      // Fluffy tip — lighter burst
       const tipGr = this.radGrad(ctx, endX, endY, 0, 20 * sc,
         [
           [0,   this.hsl((hue + 40) % 360, sat + 20, lit + 32, 0.9)],
@@ -716,6 +880,50 @@ const CreatureCanvasComponent = {
       ctx.beginPath(); ctx.arc(endX, endY, 20 * sc, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = 1;
     },
+
+    _drawTailWrap(ctx, p, sc, ox, oy, hue, sat, lit, pt) {
+      // Tail curls around and wraps under/beside the body (sitting/sleeping)
+      const tX0 = ox + p.bodyLen * sc * 0.78;
+      const tY0 = oy + p.bodyH * sc * 0.1;
+
+      const cp1x = tX0 + 18 * sc;
+      const cp1y = tY0 + 20 * sc;
+      const cp2x = ox + p.bodyLen * sc * 0.2;
+      const cp2y = oy + p.bodyH * sc * 1.1;
+      const endX = ox - p.bodyLen * sc * 0.1;
+      const endY = oy + p.bodyH * sc * 0.85;
+
+      const tailGr = this.linGrad(ctx, tX0, tY0, endX, endY,
+        [
+          [0,   this.hsl(hue, sat - 5, lit - 8)],
+          [0.5, this.hsl(hue, sat, lit + 4)],
+          [1,   this.hsl((hue + 30) % 360, sat + 15, lit + 18)],
+        ]
+      );
+      ctx.fillStyle   = tailGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 14);
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(tX0, tY0 - 8 * sc);
+      ctx.bezierCurveTo(cp1x, cp1y - 10 * sc, cp2x + 8 * sc, cp2y - 12 * sc, endX + 6 * sc, endY - 8 * sc);
+      ctx.bezierCurveTo(cp2x - 4 * sc, cp2y + 4 * sc, cp1x - 10 * sc, cp1y + 8 * sc, tX0, tY0 + 8 * sc);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      const tipGr = this.radGrad(ctx, endX, endY, 0, 16 * sc,
+        [
+          [0,   this.hsl((hue + 40) % 360, sat + 20, lit + 32, 0.9)],
+          [0.6, this.hsl((hue + 20) % 360, sat + 10, lit + 18, 0.5)],
+          [1,   this.hsl(hue, sat, lit, 0)],
+        ]
+      );
+      ctx.fillStyle = tipGr;
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath(); ctx.arc(endX, endY, 16 * sc, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    },
+
+
 
     // ----------------------------------------------------------
     // Draw a pointed ear
