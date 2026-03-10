@@ -1345,6 +1345,7 @@ const CreatureView = {
     GenomeTableComponent,
     LoadingSpinnerComponent,
     FeedingPanelComponent,
+    ActivityPanelComponent,
     BreedingPanelComponent
   },
   data() {
@@ -1357,14 +1358,15 @@ const CreatureView = {
       permlink:      null,
       postAge:       null,
       feedState:     null,
-      parentA:       null,   // { name, author, permlink, genome, age, lifecycleStage } | null
+      activityState: null,   // { playEvents, walkEvents, moodBoost, vitalityBoost, ... }
+      parentA:       null,
       parentB:       null,
-      siblings:      [],     // array of card-ready objects
+      siblings:      [],
       children:      [],
       kinshipLoading: false,
       now:           new Date(),
-      facingRight:   false,   // synced from the canvas component's random direction
-      urlCopied:     false    // brief confirmation state for the copy button
+      facingRight:   false,
+      urlCopied:     false
     };
   },
   created() {
@@ -1409,12 +1411,13 @@ const CreatureView = {
         const sb       = meta.steembiota;
         this.genome    = sb.genome;
         this.name      = sb.name || author;
-        this.postAge   = sb.age ?? 0;
+        this.postAge   = calculateAge(post.created);   // live age from publish timestamp
 
-        // Load feed events
-        const replies    = await fetchAllReplies(author, permlink);
-        const feedEvents = parseFeedEvents(replies, author);
-        this.feedState   = computeFeedState(feedEvents, this.genome);
+        // Load feed events + activity events from replies
+        const replies      = await fetchAllReplies(author, permlink);
+        const feedEvents   = parseFeedEvents(replies, author);
+        this.feedState     = computeFeedState(feedEvents, this.genome);
+        this.activityState = computeActivityState(replies, author, this.username);
 
         // Store parent refs from metadata (no extra fetch needed for display)
         this._rawParentA = sb.parentA || null;
@@ -1514,6 +1517,7 @@ const CreatureView = {
     },
 
     onFeedStateUpdated(fs) { this.feedState = fs; },
+    onActivityStateUpdated(as) { this.activityState = as; },
     onFacingResolved(dir)  { this.facingRight = dir; },
     copyUrl() {
       if (!this.steemitUrl) return;
@@ -1551,7 +1555,11 @@ const CreatureView = {
         <!-- Identity header -->
         <div style="margin-bottom:12px;">
           <div style="font-size:1.3rem;font-weight:bold;color:#a5d6a7;letter-spacing:0.03em;">🧬 {{ name }}</div>
-          <div style="font-size:0.9rem;color:#888;margin-top:2px;">{{ sexLabel }}</div>
+          <div style="font-size:0.9rem;color:#888;margin-top:2px;">
+            {{ sexLabel }}
+            <span style="color:#444;margin:0 6px;">·</span>
+            <router-link :to="'/@' + author" style="color:#80deea;text-decoration:none;font-size:0.85rem;">@{{ author }}</router-link>
+          </div>
           <div style="margin-top:8px;display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
             <span style="font-size:0.85rem;color:#aaa;">
               Age: <strong style="color:#eee;">{{ postAge }} day{{ postAge === 1 ? '' : 's' }}</strong>
@@ -1575,6 +1583,22 @@ const CreatureView = {
                 borderRadius:'12px', padding:'2px 10px'
               }"
             >{{ feedState.symbol }} {{ feedState.label }}</span>
+            <span v-if="activityState && activityState.moodLabel"
+              :style="{
+                fontSize:'0.80rem', fontWeight:'bold',
+                color: '#ce93d8',
+                border: '1px solid #7b1fa2',
+                borderRadius:'12px', padding:'2px 10px'
+              }"
+            >🎮 {{ activityState.moodLabel }}</span>
+            <span v-if="activityState && activityState.vitalityLabel"
+              :style="{
+                fontSize:'0.80rem', fontWeight:'bold',
+                color: '#80cbc4',
+                border: '1px solid #00695c',
+                borderRadius:'12px', padding:'2px 10px'
+              }"
+            >🦮 {{ activityState.vitalityLabel }}</span>
           </div>
         </div>
 
@@ -1671,6 +1695,18 @@ const CreatureView = {
           @notify="(msg,type) => notify(msg,type)"
           @feed-state-updated="onFeedStateUpdated"
         ></feeding-panel-component>
+
+        <!-- Activity panel (Play + Walk) -->
+        <activity-panel-component
+          :username="username"
+          :creature-author="author"
+          :creature-permlink="permlink"
+          :creature-name="name"
+          :unicode-art="unicodeArt"
+          :initial-activity-state="activityState"
+          @notify="(msg,type) => notify(msg,type)"
+          @activity-state-updated="onActivityStateUpdated"
+        ></activity-panel-component>
 
         <!-- Breed panel — Parent A pre-filled -->
         <breeding-panel-component
@@ -2126,6 +2162,7 @@ vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("FeedingPanelComponent",       FeedingPanelComponent);
+vueApp.component("ActivityPanelComponent",      ActivityPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
 vueApp.component("LeaderboardView",             LeaderboardView);
 

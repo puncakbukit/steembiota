@@ -1314,6 +1314,256 @@ const FeedingPanelComponent = {
 };
 
 // ============================================================
+// ActivityPanelComponent
+// Lets users play with or walk a creature — both broadcast as
+// reply posts on-chain. Effects are computed client-side.
+//
+// Play  🎮 → Mood boost → wider effective fertility window
+// Walk  🦮 → Vitality boost → extended effective lifespan
+//
+// Anti-spam: 1 play + 1 walk per user per UTC-day per creature.
+// Cap: 15 plays, 15 walks per creature lifetime.
+// ============================================================
+const ActivityPanelComponent = {
+  name: "ActivityPanelComponent",
+  props: {
+    username:              String,
+    creatureAuthor:        { type: String, default: null },
+    creaturePermlink:      { type: String, default: null },
+    creatureName:          { type: String, default: null },
+    unicodeArt:            { type: String, default: "" },
+    initialActivityState:  { type: Object, default: null }
+  },
+  emits: ["notify", "activity-state-updated"],
+  data() {
+    return {
+      activityState:      this.initialActivityState || null,
+      publishingPlay:     false,
+      publishingWalk:     false,
+      alreadyPlayedToday: this.initialActivityState?.alreadyPlayedToday || false,
+      alreadyWalkedToday: this.initialActivityState?.alreadyWalkedToday || false,
+    };
+  },
+  watch: {
+    initialActivityState(val) {
+      if (val) {
+        this.activityState      = val;
+        this.alreadyPlayedToday = val.alreadyPlayedToday || false;
+        this.alreadyWalkedToday = val.alreadyWalkedToday || false;
+      }
+    }
+  },
+  },
+  computed: {
+    canPlay() {
+      return !!this.username && !!this.creatureAuthor && !this.publishingPlay &&
+             !this.alreadyPlayedToday &&
+             (!this.activityState || this.activityState.playTotal < 15);
+    },
+    canWalk() {
+      return !!this.username && !!this.creatureAuthor && !this.publishingWalk &&
+             !this.alreadyWalkedToday &&
+             (!this.activityState || this.activityState.walkTotal < 15);
+    },
+    playButtonLabel() {
+      if (this.publishingPlay) return "Playing…";
+      if (!this.username)      return "Log in to play";
+      if (this.alreadyPlayedToday) return "Played today ✓";
+      if (this.activityState && this.activityState.playTotal >= 15) return "Play cap reached (15/15)";
+      return "🎮 Play with creature";
+    },
+    walkButtonLabel() {
+      if (this.publishingWalk) return "Walking…";
+      if (!this.username)      return "Log in to walk";
+      if (this.alreadyWalkedToday) return "Walked today ✓";
+      if (this.activityState && this.activityState.walkTotal >= 15) return "Walk cap reached (15/15)";
+      return "🦮 Take for a walk";
+    },
+    moodBarWidth() {
+      if (!this.activityState) return "0%";
+      return Math.round(this.activityState.moodPct * 100) + "%";
+    },
+    vitalityBarWidth() {
+      if (!this.activityState) return "0%";
+      return Math.round(this.activityState.vitalityPct * 100) + "%";
+    }
+  },
+  methods: {
+    _optimisticUpdate(type) {
+      // Mutate known counters directly for optimistic UI update.
+      const s = this.activityState || {
+        playTotal: 0, playOwner: 0, playCommunity: 0,
+        walkTotal: 0, walkOwner: 0, walkCommunity: 0,
+        moodPct: 0, vitalityPct: 0, moodLabel: null, vitalityLabel: null,
+        fertilityExtension: 0, vitalityLifespanBonus: 0
+      };
+      const OWNER_W = 2, COM_W = 1;
+      const isOwner = this.username === this.creatureAuthor;
+
+      let updated;
+      if (type === "play") {
+        const playTotal = s.playTotal + 1;
+        const playOwner = isOwner ? s.playOwner + 1 : s.playOwner;
+        const playCommunity = isOwner ? s.playCommunity : s.playCommunity + 1;
+        const playScore = playOwner * OWNER_W + playCommunity * COM_W;
+        const moodPct = Math.min(playScore / (15 * OWNER_W), 1.0);
+        const fertilityExtension = Math.round(moodPct * 10);
+        let moodLabel = null;
+        if      (moodPct >= 0.80) moodLabel = "Ecstatic";
+        else if (moodPct >= 0.55) moodLabel = "Playful";
+        else if (moodPct >= 0.30) moodLabel = "Cheerful";
+        else if (moodPct >  0.00) moodLabel = "Content";
+        updated = { ...s, playTotal, playOwner, playCommunity, moodPct, moodLabel, fertilityExtension };
+      } else {
+        const walkTotal = s.walkTotal + 1;
+        const walkOwner = isOwner ? s.walkOwner + 1 : s.walkOwner;
+        const walkCommunity = isOwner ? s.walkCommunity : s.walkCommunity + 1;
+        const walkScore = walkOwner * OWNER_W + walkCommunity * COM_W;
+        const vitalityPct = Math.min(walkScore / (15 * OWNER_W), 1.0);
+        const vitalityLifespanBonus = Math.round(vitalityPct * 10);
+        let vitalityLabel = null;
+        if      (vitalityPct >= 0.80) vitalityLabel = "Vigorous";
+        else if (vitalityPct >= 0.55) vitalityLabel = "Active";
+        else if (vitalityPct >= 0.30) vitalityLabel = "Lively";
+        else if (vitalityPct >  0.00) vitalityLabel = "Stirring";
+        updated = { ...s, walkTotal, walkOwner, walkCommunity, vitalityPct, vitalityLabel, vitalityLifespanBonus };
+      }
+      this.activityState = updated;
+      this.$emit("activity-state-updated", updated);
+    },
+
+    playWithCreature() {
+      if (!this.canPlay) return;
+      if (!window.steem_keychain) { this.$emit("notify", "Steem Keychain is not installed.", "error"); return; }
+      this.publishingPlay = true;
+      publishPlay(
+        this.username, this.creatureAuthor, this.creaturePermlink,
+        this.creatureName, this.unicodeArt,
+        (response) => {
+          this.publishingPlay = false;
+          if (response.success) {
+            this.alreadyPlayedToday = true;
+            this._optimisticUpdate("play");
+            this.$emit("notify", "🎮 Played with " + this.creatureName + "! Mood improved.", "success");
+          } else {
+            this.$emit("notify", "Play failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    walkCreature() {
+      if (!this.canWalk) return;
+      if (!window.steem_keychain) { this.$emit("notify", "Steem Keychain is not installed.", "error"); return; }
+      this.publishingWalk = true;
+      publishWalk(
+        this.username, this.creatureAuthor, this.creaturePermlink,
+        this.creatureName, this.unicodeArt,
+        (response) => {
+          this.publishingWalk = false;
+          if (response.success) {
+            this.alreadyWalkedToday = true;
+            this._optimisticUpdate("walk");
+            this.$emit("notify", "🦮 Took " + this.creatureName + " for a walk! Vitality improved.", "success");
+          } else {
+            this.$emit("notify", "Walk failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    }
+  },
+
+  template: `
+    <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
+      <h3 style="color:#b39ddb;margin:0 0 12px;">🎮 Activities</h3>
+
+      <!-- Login gate -->
+      <div v-if="!username" style="text-align:center;padding:18px 0;color:#555;font-size:13px;">
+        🔒 <a href="#" @click.prevent style="color:#b39ddb;text-decoration:none;cursor:default;">Log in</a> to do activities with creatures.
+      </div>
+
+      <template v-else>
+        <!-- Stats row — only shown once activityState has data -->
+        <div v-if="activityState && (activityState.playTotal > 0 || activityState.walkTotal > 0)"
+          style="max-width:520px;margin:0 auto 18px;display:flex;flex-direction:column;gap:10px;">
+
+          <!-- Mood bar -->
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
+              <span>🎮 Mood <span v-if="activityState.moodLabel" style="color:#ce93d8;">({{ activityState.moodLabel }})</span></span>
+              <span style="color:#888;">{{ activityState.playTotal }}/15 plays
+                <template v-if="activityState.fertilityExtension > 0">
+                  · Fertility +<strong style="color:#ce93d8;">{{ activityState.fertilityExtension }}d</strong>
+                </template>
+              </span>
+            </div>
+            <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;height:8px;overflow:hidden;">
+              <div :style="{ width: moodBarWidth, height:'100%', background:'#9c27b0', borderRadius:'6px', transition:'width 0.4s ease' }"></div>
+            </div>
+          </div>
+
+          <!-- Vitality bar -->
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
+              <span>🦮 Vitality <span v-if="activityState.vitalityLabel" style="color:#80cbc4;">({{ activityState.vitalityLabel }})</span></span>
+              <span style="color:#888;">{{ activityState.walkTotal }}/15 walks
+                <template v-if="activityState.vitalityLifespanBonus > 0">
+                  · Lifespan +<strong style="color:#80cbc4;">{{ activityState.vitalityLifespanBonus }}d</strong>
+                </template>
+              </span>
+            </div>
+            <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;height:8px;overflow:hidden;">
+              <div :style="{ width: vitalityBarWidth, height:'100%', background:'#00897b', borderRadius:'6px', transition:'width 0.4s ease' }"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action buttons -->
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;max-width:520px;margin:0 auto;">
+          <!-- Play card -->
+          <div style="flex:1;min-width:200px;background:#120a1e;border:1px solid #4a148c;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.2rem;margin-bottom:4px;">🎮</div>
+            <div style="font-size:13px;font-weight:bold;color:#ce93d8;margin-bottom:4px;">Play</div>
+            <div style="font-size:11px;color:#555;margin-bottom:10px;">Boosts mood · widens fertility window</div>
+            <button
+              @click="playWithCreature"
+              :disabled="!canPlay"
+              :style="{
+                width:'100%', padding:'7px 0', fontSize:'12px',
+                background: canPlay ? '#4a148c' : '#1a1a1a',
+                color: canPlay ? '#e1bee7' : '#444',
+                border: '1px solid ' + (canPlay ? '#7b1fa2' : '#2a2a2a'),
+                borderRadius:'6px', cursor: canPlay ? 'pointer' : 'default'
+              }"
+            >{{ playButtonLabel }}</button>
+            <p v-if="alreadyPlayedToday" style="color:#555;font-size:11px;margin:6px 0 0;">Come back tomorrow!</p>
+          </div>
+
+          <!-- Walk card -->
+          <div style="flex:1;min-width:200px;background:#071a17;border:1px solid #004d40;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.2rem;margin-bottom:4px;">🦮</div>
+            <div style="font-size:13px;font-weight:bold;color:#80cbc4;margin-bottom:4px;">Walk</div>
+            <div style="font-size:11px;color:#555;margin-bottom:10px;">Boosts vitality · extends lifespan</div>
+            <button
+              @click="walkCreature"
+              :disabled="!canWalk"
+              :style="{
+                width:'100%', padding:'7px 0', fontSize:'12px',
+                background: canWalk ? '#004d40' : '#1a1a1a',
+                color: canWalk ? '#b2dfdb' : '#444',
+                border: '1px solid ' + (canWalk ? '#00695c' : '#2a2a2a'),
+                borderRadius:'6px', cursor: canWalk ? 'pointer' : 'default'
+              }"
+            >{{ walkButtonLabel }}</button>
+            <p v-if="alreadyWalkedToday" style="color:#555;font-size:11px;margin:6px 0 0;">Come back tomorrow!</p>
+          </div>
+        </div>
+      </template>
+    </div>
+  `
+};
+
+// ============================================================
 // BreedingPanelComponent
 // Lets users paste two SteemBiota post URLs, loads genomes,
 // breeds them client-side (deterministic seeded PRNG + MUT),

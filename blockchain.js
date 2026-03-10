@@ -468,7 +468,179 @@ function parseFeedEvents(replies, creatureAuthor) {
 }
 
 // ============================================================
-// BREEDING KINSHIP CHECKER
+// ACTIVITY SYSTEM — Play & Walk
+//
+// Activities are reply posts (like feeds) with type "play" or "walk".
+// Anti-spam: 1 activity of each type per (user, UTC-day) per creature.
+// Cap: 15 play events, 15 walk events per creature lifetime.
+//
+// Effects (computed client-side, never alter genome):
+//   Play  → Mood boost → wider effective fertility window
+//   Walk  → Vitality boost → extended effective lifespan (stacks with feed bonus)
+//
+// Owner activities count 2×, community count 1×.
+// ============================================================
+
+// Parse play and walk events from a flat reply list.
+// Returns { playTotal, playOwner, playCommunity,
+//           walkTotal, walkOwner, walkCommunity }
+function parseActivityEvents(replies, creatureAuthor) {
+  const seenPlay = new Set();
+  const seenWalk = new Set();
+  let playTotal = 0, playOwner = 0, playCommunity = 0;
+  let walkTotal = 0, walkOwner = 0, walkCommunity = 0;
+
+  const sorted = [...replies].sort((a, b) => new Date(a.created) - new Date(b.created));
+
+  for (const reply of sorted) {
+    let meta;
+    try { meta = JSON.parse(reply.json_metadata || "{}"); } catch { continue; }
+    if (!meta.steembiota) continue;
+
+    const type    = meta.steembiota.type;
+    if (type !== "play" && type !== "walk") continue;
+
+    const actor  = reply.author;
+    const utcDay = (reply.created.endsWith("Z") ? new Date(reply.created) : new Date(reply.created + "Z"))
+                     .toISOString().slice(0, 10);
+    const key    = `${actor}::${utcDay}`;
+
+    if (type === "play") {
+      if (playTotal >= 15 || seenPlay.has(key)) continue;
+      seenPlay.add(key);
+      playTotal++;
+      if (actor === creatureAuthor) playOwner++;
+      else playCommunity++;
+    } else {
+      if (walkTotal >= 15 || seenWalk.has(key)) continue;
+      seenWalk.add(key);
+      walkTotal++;
+      if (actor === creatureAuthor) walkOwner++;
+      else walkCommunity++;
+    }
+  }
+
+  return { playTotal, playOwner, playCommunity, walkTotal, walkOwner, walkCommunity };
+}
+
+// Compute activity state from raw replies — returns bonus values and labels.
+// Pass loggedInUser to compute alreadyPlayedToday / alreadyWalkedToday.
+function computeActivityState(replies, creatureAuthor, loggedInUser) {
+  const ev = parseActivityEvents(replies, creatureAuthor);
+
+  // Weighted scores
+  const OWNER_W = 2, COM_W = 1;
+  const playScore = ev.playOwner * OWNER_W + ev.playCommunity * COM_W;
+  const walkScore = ev.walkOwner * OWNER_W + ev.walkCommunity * COM_W;
+
+  // Mood (play) → fertility window extension in days, max +20% of base FRT window
+  const moodPct = Math.min(playScore / (15 * OWNER_W), 1.0);
+  const fertilityExtension = Math.round(moodPct * 10);  // up to +10 days on each end
+
+  // Vitality (walk) → lifespan extension, up to +15% of LIF (computed at render time)
+  const vitalityPct = Math.min(walkScore / (15 * OWNER_W), 1.0);
+  const vitalityLifespanBonus = Math.round(vitalityPct * 10); // raw days; caller scales by LIF
+
+  // Labels
+  let moodLabel = null, vitalityLabel = null;
+  if      (moodPct >= 0.80) moodLabel    = "Ecstatic";
+  else if (moodPct >= 0.55) moodLabel    = "Playful";
+  else if (moodPct >= 0.30) moodLabel    = "Cheerful";
+  else if (moodPct >  0.00) moodLabel    = "Content";
+
+  if      (vitalityPct >= 0.80) vitalityLabel = "Vigorous";
+  else if (vitalityPct >= 0.55) vitalityLabel = "Active";
+  else if (vitalityPct >= 0.30) vitalityLabel = "Lively";
+  else if (vitalityPct >  0.00) vitalityLabel = "Stirring";
+
+  // Per-user today check
+  const todayUTC = new Date().toISOString().slice(0, 10);
+  let alreadyPlayedToday = false, alreadyWalkedToday = false;
+  if (loggedInUser) {
+    const sorted = [...(replies || [])];
+    for (const reply of sorted) {
+      if (reply.author !== loggedInUser) continue;
+      let meta; try { meta = JSON.parse(reply.json_metadata || "{}"); } catch { continue; }
+      if (!meta.steembiota) continue;
+      const d = (reply.created.endsWith("Z") ? reply.created : reply.created + "Z");
+      if (new Date(d).toISOString().slice(0, 10) !== todayUTC) continue;
+      if (meta.steembiota.type === "play") alreadyPlayedToday = true;
+      if (meta.steembiota.type === "walk") alreadyWalkedToday = true;
+    }
+  }
+
+  return {
+    ...ev,
+    moodPct, vitalityPct,
+    moodLabel, vitalityLabel,
+    fertilityExtension,
+    vitalityLifespanBonus,
+    alreadyPlayedToday,
+    alreadyWalkedToday,
+  };
+}
+
+// ---- Publish a play event reply to the creature's post ----
+function publishPlay(username, creatureAuthor, creaturePermlink, creatureName, unicodeArt, callback) {
+  const permlink = buildPermlink("steembiota-play-" + creatureName.toLowerCase());
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+  const artBlock = unicodeArt ? `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` : "";
+
+  const body =
+    `🎮 **Play Session** — Activity Event\n\n` +
+    `@${username} played with **${creatureName}**!\n\n` +
+    artBlock +
+    `\`\`\`\nSTEEMBIOTA_PLAY\ncreature: @${creatureAuthor}/${creaturePermlink}\nactor: ${username}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota"],
+    steembiota: {
+      version: "1.0",
+      type: "play",
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      actor: username,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, "", body, creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ["steembiota"], callback);
+}
+
+// ---- Publish a walk event reply to the creature's post ----
+function publishWalk(username, creatureAuthor, creaturePermlink, creatureName, unicodeArt, callback) {
+  const permlink = buildPermlink("steembiota-walk-" + creatureName.toLowerCase());
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+  const artBlock = unicodeArt ? `\`\`\`\n${unicodeArt}\n\`\`\`\n\n` : "";
+
+  const body =
+    `🦮 **Walk Session** — Activity Event\n\n` +
+    `@${username} took **${creatureName}** for a walk!\n\n` +
+    artBlock +
+    `\`\`\`\nSTEEMBIOTA_WALK\ncreature: @${creatureAuthor}/${creaturePermlink}\nactor: ${username}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota"],
+    steembiota: {
+      version: "1.0",
+      type: "walk",
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      actor: username,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, "", body, creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ["steembiota"], callback);
+}
+
+
 //
 // Prevents inbreeding and farming by forbidding breeding between
 // creatures that are related by blood. Forbidden relationships:
