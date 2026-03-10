@@ -175,35 +175,94 @@ const UserProfileComponent = {
 const CreatureCanvasComponent = {
   name: "CreatureCanvasComponent",
   props: {
-    genome:        { type: Object,  default: null  },
-    age:           { type: Number,  default: 0     },
-    fossil:        { type: Boolean, default: false },
-    feedState:     { type: Object,  default: null  },
-    activityState: { type: Object,  default: null  },
-    canvasW:       { type: Number,  default: 400   },
-    canvasH:       { type: Number,  default: 320   }
+    genome:          { type: Object,  default: null  },
+    age:             { type: Number,  default: 0     },
+    fossil:          { type: Boolean, default: false },
+    feedState:       { type: Object,  default: null  },
+    activityState:   { type: Object,  default: null  },
+    reactionTrigger: { type: Number,  default: 0     },
+    canvasW:         { type: Number,  default: 400   },
+    canvasH:         { type: Number,  default: 320   }
   },
   emits: ["facing-resolved", "pose-resolved"],
   data() {
     const poses = ["standing", "sitting", "sleeping", "alert", "playful"];
     return {
-      facingRight: Math.random() < 0.5,
-      pose: poses[Math.floor(Math.random() * poses.length)]
+      facingRight:     Math.random() < 0.5,
+      pose:            poses[Math.floor(Math.random() * poses.length)],
+      // Animation state — null means "use normal logic"
+      animPose:        null,
+      animExpression:  null,
+      _animTimers:     [],   // pending setTimeout ids so we can cancel on unmount
     };
   },
   watch: {
-    genome()        { this.$nextTick(() => this.draw()); },
-    age()           { this.$nextTick(() => this.draw()); },
-    fossil()        { this.$nextTick(() => this.draw()); },
-    feedState()     { this.$nextTick(() => this.draw()); },
-    activityState() { this.$nextTick(() => this.draw()); }
+    genome()           { this.$nextTick(() => this.draw()); },
+    age()              { this.$nextTick(() => this.draw()); },
+    fossil()           { this.$nextTick(() => this.draw()); },
+    feedState()        { this.$nextTick(() => this.draw()); },
+    activityState()    { this.$nextTick(() => this.draw()); },
+    reactionTrigger(v) { if (v > 0) this._startReaction(); }
   },
   mounted() {
     this.$emit("facing-resolved", this.facingRight);
     this.$emit("pose-resolved", this.pose);
     this.draw();
   },
+  beforeUnmount() {
+    // Cancel any pending animation timers to avoid drawing on a detached canvas.
+    this._animTimers.forEach(id => clearTimeout(id));
+    this._animTimers = [];
+  },
   methods: {
+
+    // ----------------------------------------------------------
+    // Reaction animation — triggered when the creature is fed,
+    // played with, or walked. Cycles through 4 pose+expression
+    // pairs 2–3 times, then restores the resting state.
+    // If called while already animating, restarts cleanly.
+    // ----------------------------------------------------------
+    _startReaction() {
+      // Cancel any in-progress animation.
+      this._animTimers.forEach(id => clearTimeout(id));
+      this._animTimers = [];
+
+      // The 4-step sequence: same order every time, predictable and legible.
+      const POSES       = ["standing", "alert",   "playful",  "sitting"];
+      const EXPRESSIONS = ["alert",    "excited",  "thriving", "happy"  ];
+
+      // Random repeats (2 or 3) and per-step duration (2000–3000 ms).
+      const repeats = 2 + Math.floor(Math.random() * 2);   // 2 or 3
+      const totalSteps = POSES.length * repeats;
+
+      let elapsed = 0;
+      for (let rep = 0; rep < repeats; rep++) {
+        for (let i = 0; i < POSES.length; i++) {
+          const stepIndex = rep * POSES.length + i;
+          const duration  = 2000 + Math.floor(Math.random() * 1001); // 2000–3000 ms
+          const delay     = elapsed;
+          const pose       = POSES[i];
+          const expression = EXPRESSIONS[i];
+
+          const id = setTimeout(() => {
+            this.animPose       = pose;
+            this.animExpression = expression;
+            this.draw();
+          }, delay);
+          this._animTimers.push(id);
+
+          elapsed += duration;
+        }
+      }
+
+      // Restore resting state after the full sequence.
+      const restId = setTimeout(() => {
+        this.animPose       = null;
+        this.animExpression = null;
+        this.draw();
+      }, elapsed);
+      this._animTimers.push(restId);
+    },
 
     // ----------------------------------------------------------
     // Tiny seeded PRNG (mulberry32) — pure, no side-effects.
@@ -768,12 +827,12 @@ const CreatureCanvasComponent = {
       const p = this.buildPhenotype(g, this.age, this.feedState);
       const sc = p.bodyScale;
 
-      // Pose is chosen randomly at mount — stable for this component instance.
-      const pose = (!p.fossil && this.pose) ? this.pose : "standing";
+      // Pose: animation override takes priority over resting random pose.
+      const pose = (!p.fossil && (this.animPose || this.pose)) ? (this.animPose || this.pose) : "standing";
       const pt   = this.buildPoseTransform(pose, p, sc, W, H);
 
-      // Expression derived from game state — drives face drawing.
-      const expression = this._buildExpression(pose, this.feedState, this.activityState);
+      // Expression: animation override takes priority over game-state-derived expression.
+      const expression = this.animExpression || this._buildExpression(pose, this.feedState, this.activityState);
 
       const ox = W * 0.46;
       const oy = H * 0.52 + pt.oyDelta;
