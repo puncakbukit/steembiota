@@ -1606,6 +1606,7 @@ const CreatureView = {
 
         <!-- Canvas render -->
         <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"
+          :activity-state="activityState"
           @facing-resolved="onFacingResolved"
           @pose-resolved="onPoseResolved"
         ></creature-canvas-component>
