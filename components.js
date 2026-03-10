@@ -320,6 +320,7 @@ const CreatureCanvasComponent = {
         oyDelta: 0, headDX: 0, headDY: 0,
         neckAngle: 0, tailUp: 0, tailCurlMul: 1, tailWrap: false,
         legOverride: null, eyeClosed: false, shadowScale: 1,
+        torsoAngle: -0.08,  // default slight tilt (matches original hardcoded value)
       };
 
       if (pose === "standing") return base;
@@ -367,9 +368,13 @@ const CreatureCanvasComponent = {
       }
 
       if (pose === "sitting") {
+        // The torso tilts rear-down ~22 degrees.
+        // oy is shifted up so the front (chest/neck) stays at the same visual height
+        // while the rear drops naturally onto the haunches.
+        const tiltAngle = 0.38;   // radians — rear angles downward
         return {
           ...base,
-          oyDelta:    10 * sc,
+          oyDelta:    -6 * sc,    // shift pivot up so chest height is stable
           headDX:     4  * sc,
           headDY:    -8  * sc,
           neckAngle:  0.3,
@@ -377,20 +382,28 @@ const CreatureCanvasComponent = {
           tailCurlMul: 1.6,
           tailWrap:   true,
           shadowScale: 1.2,
+          torsoAngle: -0.08 + tiltAngle,  // combined with base lean
           legOverride: (ctx, pp, s, ox, oy, hue, sat, lit) => {
-            // Back legs: folded haunches
+            // Rear of tilted torso drops to approximately:
+            //   rearX = ox + bodyLen*s (tail side, positive x)
+            //   rearY = oy + bodyLen*s * sin(tiltAngle)
+            // Haunches sit at the bottom of that rear drop.
+            const rearDropY = pp.bodyLen * s * Math.sin(tiltAngle);
+            const haunchY   = oy + pp.bodyH * s * 0.5 + rearDropY;
+
+            // Back haunches — behind body, at dropped rear height
             this._drawHaunch(ctx, pp, s,
-              ox + pp.bodyLen * s * 0.42, oy + pp.bodyH * s * 0.5,
+              ox + pp.bodyLen * s * 0.44, haunchY,
               hue, sat - 8, lit - 10, true);
             this._drawHaunch(ctx, pp, s,
-              ox - pp.bodyLen * s * 0.08, oy + pp.bodyH * s * 0.5,
+              ox + pp.bodyLen * s * 0.06, haunchY,
               hue, sat - 8, lit - 10, false);
-            // Front legs straight down
+            // Front legs straight down from front of torso
             this._drawLeg(ctx, pp, s,
-              ox - pp.bodyLen * s * 0.32, oy + pp.bodyH * s * 0.65,
+              ox - pp.bodyLen * s * 0.30, oy + pp.bodyH * s * 0.65,
               hue, sat, lit, false);
             this._drawLeg(ctx, pp, s,
-              ox - pp.bodyLen * s * 0.58, oy + pp.bodyH * s * 0.65,
+              ox - pp.bodyLen * s * 0.56, oy + pp.bodyH * s * 0.65,
               hue, sat, lit, false);
           }
         };
@@ -864,14 +877,14 @@ const CreatureCanvasComponent = {
       ctx.strokeStyle = H1(hue, sat, lit - 18);
       ctx.lineWidth   = 1.8;
       ctx.beginPath();
-      ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, -0.08, 0, Math.PI * 2);
+      ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, pt.torsoAngle, 0, Math.PI * 2);
       ctx.fill(); ctx.stroke();
 
       // ---- CHEST MARKING ----
       if (p.hasChestMark && p.ornamentScale > 0.2) {
         ctx.save();
         ctx.beginPath();
-        ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, -0.08, 0, Math.PI * 2);
+        ctx.ellipse(ox, oy, p.bodyLen * sc, p.bodyH * sc, pt.torsoAngle, 0, Math.PI * 2);
         ctx.clip();
         const chestGr = this.radGrad(ctx,
           ox - p.bodyLen * sc * 0.35, oy, 0, p.bodyLen * sc * 0.45,
@@ -890,7 +903,7 @@ const CreatureCanvasComponent = {
       if (p.patternOpacity > 0.1 && p.patternType > 0) {
         ctx.save();
         ctx.beginPath();
-        ctx.ellipse(ox, oy, p.bodyLen * sc - 2, p.bodyH * sc - 2, -0.08, 0, Math.PI * 2);
+        ctx.ellipse(ox, oy, p.bodyLen * sc - 2, p.bodyH * sc - 2, pt.torsoAngle, 0, Math.PI * 2);
         ctx.clip();
         ctx.globalAlpha = p.patternOpacity * 0.22;
         ctx.fillStyle   = H1((hue + 35) % 360, sat + 10, lit + 20);
