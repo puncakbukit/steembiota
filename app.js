@@ -1359,6 +1359,7 @@ const CreatureView = {
       postAge:       null,
       feedState:     null,
       activityState: null,   // { playEvents, walkEvents, moodBoost, vitalityBoost, ... }
+      reactionTrigger: 0,    // incremented on feed/play/walk success to trigger canvas animation
       parentA:       null,
       parentB:       null,
       siblings:      [],
@@ -1517,8 +1518,8 @@ const CreatureView = {
       this.kinshipLoading = false;
     },
 
-    onFeedStateUpdated(fs) { this.feedState = fs; },
-    onActivityStateUpdated(as) { this.activityState = as; },
+    onFeedStateUpdated(fs) { this.feedState = fs; this.reactionTrigger++; },
+    onActivityStateUpdated(as) { this.activityState = as; this.reactionTrigger++; },
     onFacingResolved(dir)  { this.facingRight = dir; },
     onPoseResolved(pose)   { this.currentPose = pose; },
     copyUrl() {
@@ -1607,6 +1608,7 @@ const CreatureView = {
         <!-- Canvas render -->
         <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"
           :activity-state="activityState"
+          :reaction-trigger="reactionTrigger"
           @facing-resolved="onFacingResolved"
           @pose-resolved="onPoseResolved"
         ></creature-canvas-component>
