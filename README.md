@@ -2,7 +2,7 @@
 
 **SteemBiota** is a decentralised life simulation built on the **Steem blockchain**.
 
-Creatures are generated from deterministic **genomes**, rendered procedurally in two modes, and their entire existence — from birth through breeding to fossilisation — is **permanently recorded on-chain**.
+Creatures are generated from deterministic **genomes**, rendered procedurally as canvas paintings, and their entire existence — from birth through feeding, play, breeding, and fossilisation — is **permanently recorded on-chain**.
 
 🌐 **Live app:** https://puncakbukit.github.io/steembiota
 
@@ -12,7 +12,7 @@ Creatures are generated from deterministic **genomes**, rendered procedurally in
 
 SteemBiota explores digital organisms whose evolution is permanently stored on a blockchain.
 
-Each creature has a compact genome that determines its body shape, colour, lifespan, and fertility window. Once published via Steem Keychain, the genome is immutable. A creature's lifecycle plays out in real time measured in days, and every interaction — feeding, breeding — is stored as a blockchain reply. The blockchain becomes the ecosystem's permanent fossil record.
+Each creature has a compact genome that determines its body shape, colour, lifespan, and fertility window. Once published via Steem Keychain, the genome is immutable. A creature's lifecycle plays out in real time measured in days, and every interaction — feeding, playing, walking, breeding — is stored as a blockchain reply. The blockchain becomes the ecosystem's permanent fossil record.
 
 ---
 
@@ -25,12 +25,11 @@ The dApp runs entirely in the browser with no build tools and no backend.
 | Blockchain | Steem (via steem-js) |
 | Signing | Steem Keychain browser extension |
 | UI Framework | Vue 3 (CDN) + Vue Router 4 (CDN) |
+| Routing | Vue Router 4 (CDN, hash mode) |
 | Hosting | GitHub Pages |
 | Build tools | None |
 
 Files: `index.html`, `blockchain.js`, `components.js`, `app.js`
-
-RPC fallback is attempted across four nodes in order: `api.steemit.com`, `api.justyy.com`, `steemd.steemworld.org`, `api.steem.fans`.
 
 ---
 
@@ -51,147 +50,179 @@ Each creature is defined by ten integer genes:
 | `FRT_END` | Fertility window end (days) | varies |
 | `MUT` | Mutation tendency — affects offspring variation | 0–5 |
 
-The genome is stored inside every creature post in a fenced ` ```genome ``` ` block and in `json_metadata`, so any client can reconstruct the creature directly from the blockchain.
+The genome is stored inside every creature post in a fenced code block and in `json_metadata`, so any client can reconstruct the creature directly from the blockchain.
+
+### Genus Names
+
+Each GEN value maps to a stable procedurally-generated genus name (e.g. `GEN 42` → *Vyrex*). The name is derived solely from the GEN integer so all creatures of the same genus share the same name regardless of their other genes. Genus names appear in the genome table, on creature cards, in post bodies, and as a filter option on the Home and Profile pages.
 
 ---
 
 ## Lifecycle
 
-Creature age is measured in **real days** since the post was published. Lifecycle stage is calculated as a percentage of `LIF`.
+Creature age is measured in **real days** since the post was published. Lifecycle stage is calculated as a percentage of LIF (adjusted for any lifespan bonuses from feeding and walk activity).
 
-| Stage | Age % of LIF | Icon |
+| Stage | Age % | Icon |
 |---|---|---|
 | Baby | 0–4% | 🥚 |
 | Toddler | 5–11% | 🐣 |
-| Child | 12–24% | 🌿 |
-| Teenager | 25–39% | 🌱 |
+| Child | 12–24% | 🌱 |
+| Teenager | 25–39% | 🌿 |
 | Young Adult | 40–59% | 🌸 |
 | Middle-Aged | 60–79% | 🍃 |
 | Elder | 80–99% | 🍂 |
 | Fossil | 100%+ | 🦴 |
 
-Once the lifespan is exceeded the creature becomes a **Fossil**. Its genome and history remain permanently on-chain but it can no longer be fed or used in breeding.
+Once the lifespan is exceeded the creature becomes a **Fossil**. Its genome and history remain permanently on-chain but it can no longer be fed, played with, or used in breeding.
 
 ---
 
-## Visual Rendering
+## Visual Rendering — Canvas
 
-Every creature is rendered procedurally from its genome. The same genome always produces the same visual output.
+Every creature is rendered procedurally from its genome on a 400×320 HTML5 Canvas. The same genome always produces the same base visual. Three sources of per-load variation are layered on top: random facing direction, random pose, and live expression driven by game state.
 
-### Canvas Rendering
+### Anatomy (painter's algorithm, back to front)
 
-Used in the web interface. Renders a side-profile quadruped on a 400×320 canvas using the HTML5 Canvas API.
+Ground shadow → energy ribbons → back legs (dimmed for depth) → tail → torso with gradient → chest marking → body pattern → front legs → neck → mane wisps → head with snout and nose → ears → eye → **face expression overlay** → dorsal wing/fin → glowing orb nodes → fertility aura
 
-Anatomy is drawn back to front (painter's algorithm): ground shadow, energy ribbons, back legs (dimmed for depth), flowing tail, torso with gradient, chest marking, body pattern, front legs, neck, mane wisps, head with snout and eye, ears, optional dorsal wing, glowing orb nodes along the tail, and fertility aura when in the fertile window.
-
-The creature faces left or right at random on each page load via a canvas mirror transform. The unicode art is kept in sync with the canvas facing direction — when the canvas resolves its direction it emits a `facing-resolved` event which the parent view uses to regenerate the unicode art in the matching orientation.
-
-Genome to canvas mapping:
+### Genome → Visual Mapping
 
 | Gene | Visual effect |
 |---|---|
-| MOR | Body length, head size, fill density |
-| APP | Leg length, ear height, wing presence |
-| ORN | Glow orb count and hue, chest mark, mane |
-| CLR | Base hue for body gradient |
-| LIF / age | Body scale (grows from 45% at birth to full, shrinks at elder) |
-| SX | Colour saturation variant |
+| `GEN` | Colour palette family (8 palette groups) |
+| `MOR` | Body length, body height, head size, tail curl |
+| `APP` | Leg length, leg thickness, ear height/width, wing presence |
+| `ORN` | Glow orb count and hue, chest marking, mane wisps, body pattern type |
+| `CLR` | Hue offset applied on top of palette base |
+| `LIF` / age | Body scale (45% at birth → 100% at Young Adult → 75% at Fossil) |
+| Feed health | Colour saturation and lightness boost |
 
-### Unicode Rendering
+### Facing Direction
 
-Used inside Steem post bodies so the creature's form is stored permanently on-chain as plain text. The unicode art is also embedded in feed replies and birth-announcement replies so the creature's snapshot at that moment is preserved.
+On each page load the creature is mirrored left or right at random via a canvas transform. The direction is stable for the lifetime of that component instance.
 
-Art width grows with lifecycle stage:
+### Poses
 
-| Lifecycle % | Grid width (chars) |
+On each page load the creature is assigned one of five poses at random. The pose is stable for the lifetime of that component instance.
+
+| Pose | Description |
 |---|---|
-| 0–4% (Baby) | 14 |
-| 5–11% (Toddler) | 18 |
-| 12–24% (Child) | 24 |
-| 25–49% | 30 |
-| 50–79% | 36 |
-| 80–99% (Elder) | 30 |
-| 100%+ (Fossil) | 24 |
+| 🐾 Standing | Default upright side profile |
+| 👀 Alert | Torso raised, head lifted high, tail swept straight up |
+| 🎉 Playful | Play-bow: front legs stretched forward and low, rear elevated, tail up |
+| 🪑 Sitting | Torso tilted rear-down (~17°), folded haunches resting on the ground at the base of the tilted rear, front legs straight, tail wrapped under body |
+| 💤 Sleeping | Body flat and low, head resting on ground, all legs tucked as flat pads, tail curled under, eye closed |
 
-Row structure (creature faces left by default, tail extends right; mirrored when facing right):
-- Header line: sigil + creature name + fertility sparkles when in fertile window
-- Above body: ear glyphs and optional mane wisps
-- Optional dorsal wing row above the top body row
-- Body rows: head zone (snout, eye, fill), body zone (dense fill with orb accent), tail zone (tapered characters), floating orb nodes
-- Below body: four leg columns with paw characters
+The torso ellipse rotation, haunch/leg positions, head and neck angle, tail shape, and shadow scale are all adjusted per pose. Fossil creatures always render in a flat fossilised form regardless of pose. A small italic label below the canvas shows the active pose.
 
-Genome to unicode mapping:
+### Face Expressions
 
-| Gene | Visual effect |
+Expressions are derived from live game state (feedState + activityState) and re-evaluated whenever data reloads. Pose overrides take highest priority.
+
+| Expression | Trigger | Visual |
+|---|---|---|
+| 😴 Sleepy | Sleeping pose | Closed-eye arc, drooped heavy brow, tiny neutral mouth |
+| 👀 Alert | Alert pose | Enlarged eye (×1.15), raised straight brow, neutral mouth |
+| 🎉 Excited | Playful pose | Wide open smile + tongue dot, arched brow, star glints beside eye |
+| ✨ Thriving | Health ≥ 80% (or play-boosted) | Big smile + tongue, raised brow, rosy cheek blush, star glints |
+| 😊 Happy | Health ≥ 55% | Gentle smile, relaxed raised brow |
+| 😐 Content | Health ≥ 30% or no data yet | Neutral straight mouth, flat brow |
+| 😟 Hungry | Health > 0% but < 30% | Slight frown, one-sided worried brow, pupil shifted down |
+| 😢 Sad | Completely unfed (health = 0%) | Pronounced frown, inward V-brow, teardrop below eye, pupil down |
+
+Play activity adds up to +25% to the effective health score before picking the expression, so a well-played but underfed creature can still appear happier. Expressions only appear from Toddler stage onward.
+
+---
+
+## Visual Rendering — Unicode
+
+Used inside Steem post bodies so the creature's form is stored permanently on-chain as plain text.
+
+Art width grows with lifecycle stage (14 chars at Baby up to 36 at Young Adult, back to 30 at Elder, 24 at Fossil). Row structure: ears and mane above, optional dorsal wing, body rows (head / body / tail zones), leg columns below. Fertile creatures show sparkle characters in the header line.
+
+| Gene | Unicode effect |
 |---|---|
-| `MOR mod 6` | Body fill palette and tail character style |
-| `APP mod 4` | Ear shape and paw shape |
-| `APP mod 5` | Dorsal wing presence (rare) |
-| `ORN mod 6` | Ornament and orb glyph |
-| `ORN mod 3` | Mane presence |
-| `ORN` (continuous) | Orb count (1–4) and position |
-| `GEN mod 4` | Eye glyph |
-| `GEN mod 6` | Header sigil |
+| `MOR` mod 6 | Body fill palette and tail character style |
+| `APP` mod 4 | Ear and paw shape |
+| `APP` mod 5 | Dorsal wing presence (rare) |
+| `ORN` mod 6 | Ornament and orb glyph |
+| `ORN` mod 3 | Mane presence |
+| `ORN` continuous | Orb count (1–4) and position |
+| `GEN` mod 4 | Eye glyph |
+| `GEN` mod 6 | Header sigil |
 
 ---
 
 ## Feeding
 
-Any logged-in Steem user can feed a creature by loading its post URL. Each feed is published as a blockchain reply.
+Any logged-in Steem user can feed a creature by loading its post page. Each feed is published as a blockchain reply.
 
 ### Food Types
 
 | Food | Lifespan bonus | Fertility boost |
 |---|---|---|
-| Nectar 🍯 | +1 day per feed | none |
-| Fruit 🍎 | +0.5 days per feed | +10% per feed (community only) |
-| Crystal 💎 | none | +5% per feed (community only) |
+| Nectar | +1 day per feed | none |
+| Fruit | +0.5 days per feed | +10% per feed |
+| Crystal | none | +5% per feed |
 
 ### Feed Rules
 
 - Each feeder is counted at most once per UTC day (anti-spam).
 - Total feeds are capped at 20 per creature lifetime.
-- Owner feeds count 3× toward the weighted health score; community feeds count 1×.
-- Maximum lifespan bonus: +20% of base `LIF`.
+- Owner feeds count 3× toward the health score; community feeds count 1×.
+- Maximum lifespan bonus: +20% of base LIF.
 - Maximum fertility boost from community feeding: +25%.
 
 ### Health States
 
-| State | Health % threshold | Symbol |
-|---|---|---|
-| Thriving | 80%+ | ✨ |
-| Well-fed | 55%+ | ✦ |
-| Nourished | 30%+ | • |
-| Hungry | above 0% | · |
-| Unfed | 0% | · |
+| State | Threshold |
+|---|---|
+| Thriving | 80%+ |
+| Well-fed | 55%+ |
+| Nourished | 30%+ |
+| Hungry | above 0% |
+| Unfed | 0% |
 
 ---
 
-## Founder Creation
+## Activities — Play & Walk
 
-Any logged-in user can create a **founder creature** directly from the Home page.
+Beyond feeding, logged-in users can interact with a creature through two daily activities. Activity events are published as blockchain replies and scored separately from feed events.
 
-Founders are origin creatures with no parents. Their genome is randomly generated, with the option to **specify the genus (`GEN`) manually** (0–999) before rolling. All other genes (sex, morphology, colour, lifespan, mutation tendency) remain random. Specifying a genus is useful when seeding a population for breeding — two founders of the same genus but opposite sex can be bred together.
+### Play 🎮
 
-After the genome is generated, the user may edit the default post title before publishing. On successful publication via Steem Keychain the app navigates directly to the new creature's page.
+Playing improves the creature's **mood**, which affects its face expression and extends its fertility window.
+
+- Each player is counted at most once per UTC day (anti-spam). Cap: 15 play events.
+- Owner plays count 2×; community plays count 1×.
+- **Mood score** (0–100%) scales linearly from total weighted play count.
+- **Fertility extension**: up to +10 days added to each side of the fertility window at max mood.
+
+### Walk 🦮
+
+Walking builds the creature's **vitality**, which extends its lifespan.
+
+- Same anti-spam rules as play (1 per user per UTC day). Cap: 15 walk events.
+- Owner walks count 2×; community walks count 1×.
+- **Vitality score** (0–100%) scales linearly from total weighted walk count.
+- **Lifespan bonus**: up to +10 extra days at max vitality.
+
+Mood and vitality badges (purple and teal) are shown in the creature page header stats row. The activity panel shows today's status and prevents duplicate actions.
 
 ---
 
 ## Breeding
 
-Users pair two compatible creatures by pasting their Steem post URLs. The child genome is generated deterministically and published as a new Steem post. After a successful breed the app navigates directly to the new offspring's page.
+Users pair two compatible creatures by pasting their Steem post URLs. The child genome is generated deterministically and published as a new Steem post.
 
 ### Compatibility Rules
 
 All of the following must be true:
 
-1. Both creatures share the same `GEN` (same genus)
-2. Opposite `SX` (one ♂ Male, one ♀ Female)
-3. Both creatures are currently within their fertility window (`FRT_START ≤ age < FRT_END`)
-4. Neither creature is a fossil (`age < LIF`)
-5. Neither creature is the other's close relative (see Kinship Rules)
-
-The fertility age check uses the creature's **current age** at breed time — computed as the age stored in `json_metadata` at publish time plus the number of days elapsed since `post.created`. Clear error messages indicate which parent is too young, too old, or past its lifespan.
+1. Same GEN (same genus)
+2. Opposite SX (one Male, one Female)
+3. Both creatures are within their fertility window at the time of breeding
+4. Neither creature is the other's close relative (see Kinship Rules)
 
 ### Gene Inheritance
 
@@ -199,7 +230,7 @@ Each gene is inherited from one parent chosen at random (50/50), then potentiall
 
 ### Speciation
 
-There is a 0.5% chance per breeding event that the child's `GEN` mutates to an entirely new value, creating a new genus. Speciated offspring cannot breed with their parents' genus.
+There is a 0.5% chance per breeding event that the child's GEN mutates to an entirely new value, creating a new genus. Speciated offspring cannot breed with their parents' genus.
 
 ### Kinship Rules
 
@@ -208,23 +239,57 @@ SteemBiota walks the blockchain ancestry graph before allowing a breed. A creatu
 1. Its own and its partner's parents, grandparents, and all ancestors upward
 2. Its own and its partner's siblings (full or half — any creature sharing at least one parent)
 3. Its own and its partner's children, grandchildren, and all descendants downward
-4. Its own and its partner's parents' siblings (aunts and uncles, full or half)
-5. Its own and its partner's siblings' children, grandchildren, and all descendants downward
+4. Its own and its partner's parents' siblings (aunts and uncles)
+5. Its own and its partner's siblings' children and all descendants downward
 
-**How it works on-chain:**
+The check is entirely client-side using BFS ancestry traversal (up to 12 generations). If blocked, the UI names the specific relationship that prevents breeding.
 
-Each offspring post stores `parentA` and `parentB` (author and permlink) in `json_metadata.steembiota`. At breed time the client:
+---
 
-1. Walks ancestry upward for both creatures via breadth-first search (up to 12 generations).
-2. Collects every author seen and fetches their 100 most recent SteemBiota posts to build a local kinship corpus.
-3. Within that corpus identifies all five categories of relatives for each creature.
-4. Blocks breeding if either creature appears in the other's forbidden set, naming the specific relationship.
+## User Levels & XP
 
-This prevents same-bloodline farming while keeping the check entirely client-side and bounded in blockchain API calls.
+Every on-chain action earns XP for the acting user. XP totals are computed client-side from blockchain history and displayed on each user's profile page.
 
-### Birth Announcement Replies
+| Action | XP |
+|---|---|
+| Publish a founder creature | 100 |
+| Publish an offspring | 75 |
+| Feed a creature (owner) | 20 |
+| Feed a creature (community) | 10 |
+| Play with a creature | 5 |
+| Walk a creature | 5 |
 
-After a successful offspring publish, SteemBiota automatically posts a birth-announcement reply to **both parent posts**. Each reply includes the offspring's sex, genus, lifespan, mutation status, unicode art snapshot, and a link to the offspring's creature page. These replies are best-effort and non-blocking — a failure does not prevent the breed from succeeding.
+XP thresholds follow a quadratic curve. Level title and progress are shown prominently on the profile page.
+
+---
+
+## Leaderboard
+
+The `/leaderboard` page ranks all known SteemBiota participants by XP. It paginates through up to 200 creature posts using cursor-based pagination (Steem's API hard-limits responses to 100 posts per call), aggregates per-user XP from all activity, and displays the top players with their level badges.
+
+---
+
+## Creature Grid Filters
+
+Both the Home page and individual Profile pages include a filter bar above the creature grid:
+
+- **Genus** — filter by genus name (e.g. show only *Vyrex* creatures)
+- **Sex** — filter by Male / Female
+- **Age** — filter by age in days using `<`, `=`, or `>` operators with a numeric input
+
+Filters can be combined and are cleared individually. Pagination resets automatically when a filter changes.
+
+---
+
+## App Routes
+
+| URL | View |
+|---|---|
+| `/#/` | Home — creature grid with filters, founder creator |
+| `/#/about` | About page |
+| `/#/leaderboard` | Global XP leaderboard |
+| `/#/@user` | User profile — creature grid with filters, level/XP badge, Steem profile header |
+| `/#/@author/permlink` | Creature page — canvas render with pose + expression, unicode render, genome table, stats, feed panel, activity panel (play/walk), breed panel |
 
 ---
 
@@ -232,38 +297,50 @@ After a successful offspring publish, SteemBiota automatically posts a birth-ann
 
 ### Creature post (`json_metadata.steembiota`)
 
+```json
+{
+  "version": "1.0",
+  "type": "creature",
+  "genome": { "GEN": 42, "SX": 0, "MOR": 1234, "APP": 5678, "ORN": 9012, "CLR": 180, "LIF": 100, "FRT_START": 30, "FRT_END": 70, "MUT": 1 },
+  "name": "Vyrex Nymwhisper",
+  "genusName": "Vyrex",
+  "age": 0,
+  "lifecycleStage": "Baby",
+  "parentA": { "author": "alice", "permlink": "vyrex-nymwhisper-..." },
+  "parentB": { "author": "bob",   "permlink": "vyrex-shadowpaw-..." },
+  "mutated": false,
+  "speciated": false
+}
 ```
-version: "1.0"
-type: "founder" | "offspring"
-genome: { GEN, SX, MOR, APP, ORN, CLR, LIF, FRT_START, FRT_END, MUT }
-name: display name
-age: days at time of publication
-lifecycleStage: stage name
-parentA: { author, permlink }   (offspring only)
-parentB: { author, permlink }   (offspring only)
-mutated: boolean                (offspring only)
-speciated: boolean              (offspring only)
-```
+
+`parentA`, `parentB`, `mutated`, and `speciated` are only present on offspring posts.
 
 ### Feed reply (`json_metadata.steembiota`)
 
-```
-version: "1.0"
-type: "feed"
-creature: { author, permlink }
-feeder: username
-food: "nectar" | "fruit" | "crystal"
-ts: ISO 8601 UTC timestamp
+```json
+{
+  "version": "1.0",
+  "type": "feed",
+  "creature": { "author": "alice", "permlink": "vyrex-nymwhisper-..." },
+  "feeder": "carol",
+  "food": "nectar",
+  "ts": "2026-01-03T07:00:00Z"
+}
 ```
 
-### Birth announcement reply (`json_metadata.steembiota`)
+### Activity reply (`json_metadata.steembiota`)
 
+```json
+{
+  "version": "1.0",
+  "type": "play",
+  "creature": { "author": "alice", "permlink": "vyrex-nymwhisper-..." },
+  "player": "carol",
+  "ts": "2026-01-03T07:30:00Z"
+}
 ```
-version: "1.0"
-type: "birth"
-child: { author, permlink }
-ts: ISO 8601 UTC timestamp
-```
+
+`type` is `"play"` or `"walk"`.
 
 ### Post titles
 
@@ -276,38 +353,6 @@ Vyrex Nymwhisper — born at 7 in the morning UTC on Monday, January 3, 2026
 ### Permlinks
 
 Derived from the post title: lowercased, whitespace becomes hyphens, non-alphanumeric stripped, truncated at 200 chars, then a millisecond timestamp appended. Always unique.
-
----
-
-## App Routes
-
-| URL | View |
-|---|---|
-| `/#/` | Home — founder creation, breed and feed panels, all-creatures grid |
-| `/#/about` | About page — renders this README |
-| `/#/@author/permlink` | Creature page — canvas render, unicode render, genome table, family panel, feed panel, breed panel with Parent A pre-filled |
-| `/#/@user` | User profile page — all creatures published by that user |
-
-After a successful founder publish or offspring breed, the app navigates directly to the new creature's page.
-
-The creature page URL is embedded in every published post and feed reply body so Steem readers can visit the live visual rendering directly.
-
----
-
-## UI Features
-
-### Profile Banner
-
-A global profile banner is shown at the top of every page. When a user is logged in it displays their own Steem profile image, cover image, display name, and username. When no user is logged in it falls back to the **@steembiota** account's profile and cover images, providing a consistent site identity for guests.
-
-### Creature Grid Filters
-
-Both the Home page (all creatures) and the Profile page (creatures by user) include filter controls above the creature grid:
-
-- **Genus filter** — a dropdown listing all genus IDs present in the loaded creatures. Selecting a genus shows only creatures of that genus, making it easy to identify breeding candidates.
-- **Sex filter** — toggle buttons for All / ♂ Male / ♀ Female. Active filter is highlighted.
-
-Filters are independent and can be combined. The creature count updates to reflect the filtered result (e.g. "3 of 12 total"). Pagination resets to page 1 whenever a filter changes.
 
 ---
 
