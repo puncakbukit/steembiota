@@ -419,6 +419,43 @@ const CreatureCanvasComponent = {
     },
 
     // ----------------------------------------------------------
+    // Draw a single leg + paw (standard upright)
+    // ----------------------------------------------------------
+    _drawLeg(ctx, p, sc, x, y, hue, sat, lit, behind) {
+      const lLen = p.legLen * sc;
+      const lW   = p.legThick * sc;
+      const alpha = behind ? 0.62 : 1.0;
+      ctx.globalAlpha = alpha;
+
+      const legGr = this.linGrad(ctx, x, y, x + lW * 0.3, y + lLen * 0.6,
+        [
+          [0, this.hsl(hue, sat - 5, lit - 5)],
+          [1, this.hsl(hue, sat - 10, lit - 14)],
+        ]
+      );
+      ctx.fillStyle   = legGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - lW * 0.5, y);
+      ctx.quadraticCurveTo(x - lW * 0.7, y + lLen * 0.5, x - lW * 0.3, y + lLen * 0.7);
+      ctx.lineTo(x + lW * 0.3, y + lLen * 0.7);
+      ctx.quadraticCurveTo(x + lW * 0.7, y + lLen * 0.5, x + lW * 0.5, y);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      // Paw
+      ctx.fillStyle   = this.hsl(hue, sat - 15, lit + 10);
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 22);
+      ctx.lineWidth   = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(x, y + lLen * 0.72, lW * 0.72, lW * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
     // Draw a stretched/angled leg (play-bow front legs)
     // ----------------------------------------------------------
     _drawLegPose(ctx, p, sc, x, y, hue, sat, lit, behind, style) {
@@ -557,6 +594,7 @@ const CreatureCanvasComponent = {
           ctx.stroke();
         }
         ctx.globalAlpha = 1;
+        if (this.facingRight) ctx.restore();
         return;
       }
 
