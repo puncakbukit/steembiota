@@ -1358,6 +1358,8 @@ const CreatureView = {
       permlink:      null,
       postAge:       null,
       feedState:     null,
+      feedEvents:    null,
+      alreadyFedToday: false,
       activityState: null,   // { playEvents, walkEvents, moodBoost, vitalityBoost, ... }
       reactionTrigger: 0,    // incremented on feed/play/walk success to trigger canvas animation
       parentA:       null,
@@ -1418,8 +1420,21 @@ const CreatureView = {
         // Load feed events + activity events from replies
         const replies      = await fetchAllReplies(author, permlink);
         const feedEvents   = parseFeedEvents(replies, author);
+        this.feedEvents    = feedEvents;
         this.feedState     = computeFeedState(feedEvents, this.genome);
         this.activityState = computeActivityState(replies, author, this.username);
+
+        // Check if logged-in user already fed today
+        if (this.username) {
+          const todayUTC = new Date().toISOString().slice(0, 10);
+          this.alreadyFedToday = replies.some(r => {
+            if (r.author !== this.username) return false;
+            let m = {}; try { m = JSON.parse(r.json_metadata || "{}"); } catch {}
+            if (!m.steembiota || m.steembiota.type !== "feed") return false;
+            const d = r.created.endsWith("Z") ? r.created : r.created + "Z";
+            return new Date(d).toISOString().slice(0, 10) === todayUTC;
+          });
+        }
 
         // Store parent refs from metadata (no extra fetch needed for display)
         this._rawParentA = sb.parentA || null;
@@ -1518,7 +1533,11 @@ const CreatureView = {
       this.kinshipLoading = false;
     },
 
-    onFeedStateUpdated(fs) { this.feedState = fs; this.reactionTrigger++; },
+    onFeedStateUpdated(fs) {
+      this.feedState = fs;
+      this.alreadyFedToday = true;   // panel only emits this after a successful feed
+      this.reactionTrigger++;
+    },
     onActivityStateUpdated(as) { this.activityState = as; this.reactionTrigger++; },
     onFacingResolved(dir)  { this.facingRight = dir; },
     onPoseResolved(pose)   { this.currentPose = pose; },
@@ -1623,8 +1642,13 @@ const CreatureView = {
         <!-- Feed panel -->
         <feeding-panel-component
           :username="username"
-          :initial-url="steemitUrl"
           :unicode-art="unicodeArt"
+          :ctx-author="author"
+          :ctx-permlink="permlink"
+          :ctx-name="name"
+          :ctx-feed-state="feedState"
+          :ctx-feed-events="feedEvents"
+          :ctx-already-fed="alreadyFedToday"
           @notify="(msg,type) => notify(msg,type)"
           @feed-state-updated="onFeedStateUpdated"
         ></feeding-panel-component>

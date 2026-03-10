@@ -1557,8 +1557,14 @@ const GlobalProfileBannerComponent = {
 
 // ============================================================
 // FeedingPanelComponent
-// Lets users paste a SteemBiota post URL, view its feed history,
-// and send a new feeding reply via Steem Keychain.
+// Two modes:
+//
+//   Default (HomeView): no ctx* props passed — shows URL input + Load button
+//     so users can find any creature and feed it.
+//
+//   Creature context (CreatureView): ctxAuthor (and other ctx* props) are passed
+//     directly — URL input and Load button are hidden. Health bar, feed stats,
+//     food selector, and feed button are shown using the page's creature data.
 //
 // Anti-spam (read-side): parseFeedEvents() enforces
 //   — 1 feed per (feeder, UTC-day) pair
@@ -1569,32 +1575,46 @@ const GlobalProfileBannerComponent = {
 const FeedingPanelComponent = {
   name: "FeedingPanelComponent",
   props: {
-    username:   String,
-    initialUrl: { type: String, default: "" },   // pre-fill + auto-load from CreatureView
-    unicodeArt: { type: String, default: "" }    // current unicode snapshot passed in by parent
+    username:          String,
+    initialUrl:        { type: String, default: "" },
+    unicodeArt:        { type: String, default: "" },
+    // — creature-mode props (CreatureView passes these; their presence activates creature mode) —
+    ctxAuthor:         { type: String,  default: null },
+    ctxPermlink:       { type: String,  default: null },
+    ctxName:           { type: String,  default: null },
+    ctxFeedState:      { type: Object,  default: null },
+    ctxFeedEvents:     { type: Object,  default: null },
+    ctxAlreadyFed:     { type: Boolean, default: false },
   },
   emits: ["notify", "feed-state-updated"],
   data() {
+    const inCreatureCtx = !!this.ctxAuthor;
     return {
+      // URL-mode state (unused when ctxAuthor is provided)
       postUrl:          this.initialUrl || "",
-      foodType:         "nectar",
       loading:          false,
       loadError:        "",
+      // Local creature context — seeded from ctx* props when in creature context
+      creatureAuthor:   inCreatureCtx ? this.ctxAuthor   : null,
+      creaturePermlink: inCreatureCtx ? this.ctxPermlink : null,
+      creatureName:     inCreatureCtx ? this.ctxName     : null,
+      creatureGenome:   null,
+      feedEvents:       inCreatureCtx ? this.ctxFeedEvents : null,
+      feedState:        inCreatureCtx ? this.ctxFeedState  : null,
+      alreadyFedToday:  inCreatureCtx ? this.ctxAlreadyFed : false,
+      // Shared
+      foodType:         "nectar",
       publishing:       false,
-      // Loaded creature context
-      creatureAuthor:   null,
-      creaturePermlink: null,
-      creatureName:     null,
-      creatureGenome:   null,   // stored so we can build unicode art on feed
-      feedEvents:       null,   // raw result from parseFeedEvents()
-      feedState:        null,   // computed from computeFeedState()
-      // Rate-limit check
-      alreadyFedToday:  false,
     };
   },
+  watch: {
+    // When creature context is provided the parent may push updated state after a feed
+    ctxFeedState(val)  { if (this.ctxAuthor && val) this.feedState  = val; },
+    ctxFeedEvents(val) { if (this.ctxAuthor && val) this.feedEvents = val; },
+    ctxAlreadyFed(val) { if (this.ctxAuthor)        this.alreadyFedToday = val; },
+  },
   created() {
-    // If the creature page passed in a URL, load automatically
-    if (this.initialUrl) this.loadCreature();
+    if (!this.ctxAuthor && this.initialUrl) this.loadCreature();
   },
   computed: {
     foodOptions() {
@@ -1622,10 +1642,10 @@ const FeedingPanelComponent = {
              this.feedEvents.total < 20;
     },
     feedButtonLabel() {
-      if (this.publishing)         return "Feeding…";
-      if (!this.username)          return "Log in to feed";
-      if (!this.creatureAuthor)    return "Load a creature first";
-      if (this.alreadyFedToday)    return "Already fed today ✓";
+      if (this.publishing)      return "Feeding…";
+      if (!this.username)       return "Log in to feed";
+      if (!this.creatureAuthor) return "Load a creature first";
+      if (this.alreadyFedToday) return "Already fed today ✓";
       if (this.feedEvents && this.feedEvents.total >= 20) return "Feed cap reached (20/20)";
       return "🍃 Feed this creature";
     }
@@ -1650,7 +1670,6 @@ const FeedingPanelComponent = {
         const post = await fetchPost(author, permlink);
         if (!post || !post.author) throw new Error("Post not found.");
 
-        // Verify it's a SteemBiota post
         let meta = {};
         try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
         if (!meta.steembiota) throw new Error("This post does not appear to be a SteemBiota creature.");
@@ -1660,28 +1679,20 @@ const FeedingPanelComponent = {
         this.creatureName     = meta.steembiota.name || author;
         this.creatureGenome   = meta.steembiota.genome || null;
 
-        // Fetch all replies and parse feed events
         const replies = await fetchAllReplies(author, permlink);
         this.feedEvents = parseFeedEvents(replies, author);
         this.feedState  = computeFeedState(this.feedEvents, meta.steembiota.genome || { LIF: 100 });
         this.$emit("feed-state-updated", this.feedState);
 
-        // Check if logged-in user already fed today
         if (this.username) {
           const todayUTC = new Date().toISOString().slice(0, 10);
-          const key = `${this.username}::${todayUTC}`;
-          // Reconstruct from byFeeder — we check if any feed from today exists
-          // (parseFeedEvents already deduped, so if byFeeder has this user it counted once today max)
-          // More precise: re-scan replies for today
-          const alreadyToday = replies.some(r => {
+          this.alreadyFedToday = replies.some(r => {
             if (r.author !== this.username) return false;
-            let m = {};
-            try { m = JSON.parse(r.json_metadata || "{}"); } catch {}
+            let m = {}; try { m = JSON.parse(r.json_metadata || "{}"); } catch {}
             if (!m.steembiota || m.steembiota.type !== "feed") return false;
-            const d = (r.created.endsWith("Z") ? r.created : r.created + "Z");
+            const d = r.created.endsWith("Z") ? r.created : r.created + "Z";
             return new Date(d).toISOString().slice(0, 10) === todayUTC;
           });
-          this.alreadyFedToday = alreadyToday;
         }
       } catch(e) {
         this.loadError = e.message || String(e);
@@ -1695,9 +1706,6 @@ const FeedingPanelComponent = {
         this.$emit("notify", "Steem Keychain is not installed.", "error");
         return;
       }
-      // Build the current unicode art snapshot for embedding in the reply.
-      // Prefer the prop passed in by the parent (already direction-synced);
-      // fall back to building from the stored genome at age 0 if unavailable.
       const artSnapshot = this.unicodeArt ||
         (this.creatureGenome ? buildUnicodeArt(this.creatureGenome, 0, this.feedState) : "");
       this.publishing = true;
@@ -1711,20 +1719,15 @@ const FeedingPanelComponent = {
         (response) => {
           this.publishing = false;
           if (response.success) {
-            // Optimistically update local state
-            const feeder = this.username;
+            const feeder  = this.username;
             const isOwner = feeder === this.creatureAuthor;
             this.feedEvents = {
               ...this.feedEvents,
               total:          this.feedEvents.total + 1,
               ownerFeeds:     isOwner ? this.feedEvents.ownerFeeds + 1 : this.feedEvents.ownerFeeds,
               communityFeeds: isOwner ? this.feedEvents.communityFeeds : this.feedEvents.communityFeeds + 1,
-              byFeeder: {
-                ...this.feedEvents.byFeeder,
-                [feeder]: (this.feedEvents.byFeeder[feeder] || 0) + 1
-              }
+              byFeeder: { ...this.feedEvents.byFeeder, [feeder]: (this.feedEvents.byFeeder[feeder] || 0) + 1 }
             };
-            // We need genome.LIF for recompute — re-use a stub if genome not available
             const genomeLIF = this.feedState
               ? Math.round(this.feedState.lifespanBonus / 0.20 + (this.feedState.lifespanBonus > 0 ? 1 : 100))
               : 100;
@@ -1743,97 +1746,94 @@ const FeedingPanelComponent = {
 
   template: `
     <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
-      <h3 style="color:#66bb6a;margin:0 0 12px;">🍃 Feed a Creature</h3>
+      <h3 style="color:#66bb6a;margin:0 0 12px;">🍃 Feed</h3>
 
       <!-- Login gate -->
       <div v-if="!username" style="text-align:center;padding:18px 0;color:#555;font-size:13px;">
-        🔒 <a href="#" @click.prevent style="color:#66bb6a;text-decoration:none;cursor:default;">Log in</a> to feed creatures.
+        🔒 Log in to feed creatures.
       </div>
 
       <template v-else>
-      <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
-        <input
-          v-model="postUrl"
-          type="text"
-          placeholder="Creature post URL (steemit.com/@user/permlink)"
-          style="font-size:13px;"
-          @keydown.enter="loadCreature"
-        />
-        <button @click="loadCreature" :disabled="loading" style="background:#1a2e1a;">
-          {{ loading ? "Loading…" : "🔍 Load Creature" }}
-        </button>
-      </div>
 
-      <!-- Error -->
-      <div v-if="loadError" style="color:#ff8a80;font-size:13px;margin-top:8px;">
-        ⚠ {{ loadError }}
-      </div>
-
-      <!-- Creature feed summary -->
-      <div v-if="feedState && creatureName" style="margin-top:18px;">
-        <div style="font-size:0.95rem;font-weight:bold;color:#a5d6a7;margin-bottom:10px;">
-          {{ creatureName }}
-          <span style="font-size:0.78rem;font-weight:normal;color:#666;">
-            @{{ creatureAuthor }}/{{ creaturePermlink }}
-          </span>
-        </div>
-
-        <!-- Health bar -->
-        <div style="max-width:320px;margin:0 auto 12px;">
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
-            <span>Health</span>
-            <span>{{ feedState.symbol }} {{ feedState.label }}</span>
+        <!-- URL input — only shown when no creature context is provided (e.g. HomeView) -->
+        <template v-if="!ctxAuthor">
+          <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
+            <input
+              v-model="postUrl"
+              type="text"
+              placeholder="Creature post URL (steemit.com/@user/permlink)"
+              style="font-size:13px;"
+              @keydown.enter="loadCreature"
+            />
+            <button @click="loadCreature" :disabled="loading" style="background:#1a2e1a;">
+              {{ loading ? "Loading…" : "🔍 Load Creature" }}
+            </button>
           </div>
-          <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;height:10px;overflow:hidden;">
-            <div :style="{
-              width: healthBarWidth,
-              height: '100%',
-              background: healthBarColor,
-              borderRadius: '6px',
-              transition: 'width 0.4s ease'
-            }"></div>
+          <div v-if="loadError" style="color:#ff8a80;font-size:13px;margin-top:8px;">
+            ⚠ {{ loadError }}
           </div>
-        </div>
+        </template>
 
-        <!-- Feed stats -->
-        <div style="font-size:12px;color:#666;margin-bottom:12px;">
-          Total feeds: <strong style="color:#aaa;">{{ feedEvents.total }}/20</strong>
-          &nbsp;·&nbsp;
-          Owner: <strong style="color:#aaa;">{{ feedEvents.ownerFeeds }}</strong>
-          &nbsp;·&nbsp;
-          Community: <strong style="color:#aaa;">{{ feedEvents.communityFeeds }}</strong>
-          <template v-if="feedState.lifespanBonus > 0">
+        <!-- Feed UI — shown once creature is loaded (or always in creature-mode) -->
+        <div v-if="feedState" style="margin-top:12px;">
+
+          <!-- Health bar -->
+          <div style="max-width:320px;margin:0 auto 12px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
+              <span>Health</span>
+              <span>{{ feedState.symbol }} {{ feedState.label }}</span>
+            </div>
+            <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;height:10px;overflow:hidden;">
+              <div :style="{
+                width: healthBarWidth, height: '100%',
+                background: healthBarColor, borderRadius: '6px',
+                transition: 'width 0.4s ease'
+              }"></div>
+            </div>
+          </div>
+
+          <!-- Feed stats -->
+          <div style="font-size:12px;color:#666;margin-bottom:12px;">
+            Total feeds: <strong style="color:#aaa;">{{ feedEvents.total }}/20</strong>
             &nbsp;·&nbsp;
-            Lifespan +<strong style="color:#66bb6a;">{{ feedState.lifespanBonus }}d</strong>
-          </template>
-          <template v-if="feedState.fertilityBoost > 0">
+            Owner: <strong style="color:#aaa;">{{ feedEvents.ownerFeeds }}</strong>
             &nbsp;·&nbsp;
-            Fertility +<strong style="color:#f48fb1;">{{ Math.round(feedState.fertilityBoost * 100) }}%</strong>
-          </template>
-        </div>
-
-        <!-- Food selector -->
-        <div style="display:flex;flex-direction:column;gap:6px;max-width:320px;margin:0 auto 10px;">
-          <div v-for="opt in foodOptions" :key="opt.value" style="display:flex;align-items:center;gap:8px;cursor:pointer;" @click="foodType = opt.value">
-            <div :style="{
-              width: '14px', height: '14px', borderRadius: '50%',
-              border: '2px solid ' + (foodType === opt.value ? '#66bb6a' : '#444'),
-              background: foodType === opt.value ? '#2e7d32' : 'transparent',
-              flexShrink: 0
-            }"></div>
-            <span :style="{ fontSize: '13px', color: foodType === opt.value ? '#eee' : '#888' }">{{ opt.label }}</span>
+            Community: <strong style="color:#aaa;">{{ feedEvents.communityFeeds }}</strong>
+            <template v-if="feedState.lifespanBonus > 0">
+              &nbsp;·&nbsp;
+              Lifespan +<strong style="color:#66bb6a;">{{ feedState.lifespanBonus }}d</strong>
+            </template>
+            <template v-if="feedState.fertilityBoost > 0">
+              &nbsp;·&nbsp;
+              Fertility +<strong style="color:#f48fb1;">{{ Math.round(feedState.fertilityBoost * 100) }}%</strong>
+            </template>
           </div>
+
+          <!-- Food selector -->
+          <div style="display:flex;flex-direction:column;gap:6px;max-width:320px;margin:0 auto 10px;">
+            <div v-for="opt in foodOptions" :key="opt.value"
+                 style="display:flex;align-items:center;gap:8px;cursor:pointer;"
+                 @click="foodType = opt.value">
+              <div :style="{
+                width:'14px', height:'14px', borderRadius:'50%',
+                border: '2px solid ' + (foodType === opt.value ? '#66bb6a' : '#444'),
+                background: foodType === opt.value ? '#2e7d32' : 'transparent',
+                flexShrink: 0
+              }"></div>
+              <span :style="{ fontSize:'13px', color: foodType === opt.value ? '#eee' : '#888' }">{{ opt.label }}</span>
+            </div>
+          </div>
+
+          <!-- Feed button -->
+          <button @click="feedCreature" :disabled="!canFeed" style="background:#1b3a1b;">
+            {{ feedButtonLabel }}
+          </button>
+          <p v-if="alreadyFedToday" style="color:#555;font-size:12px;margin:4px 0;">
+            Come back tomorrow to feed again.
+          </p>
+
         </div>
 
-        <!-- Feed button -->
-        <button
-          @click="feedCreature"
-          :disabled="!canFeed"
-          style="background:#1b3a1b;"
-        >{{ feedButtonLabel }}</button>
-
-        <p v-if="alreadyFedToday" style="color:#555;font-size:12px;margin:4px 0;">Come back tomorrow to feed again.</p>
-      </div>
       </template>
     </div>
   `
