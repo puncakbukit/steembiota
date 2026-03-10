@@ -1366,6 +1366,7 @@ const CreatureView = {
       kinshipLoading: false,
       now:           new Date(),
       facingRight:   false,
+      currentPose:   null,   // emitted from canvas component on mount
       urlCopied:     false
     };
   },
@@ -1519,6 +1520,7 @@ const CreatureView = {
     onFeedStateUpdated(fs) { this.feedState = fs; },
     onActivityStateUpdated(as) { this.activityState = as; },
     onFacingResolved(dir)  { this.facingRight = dir; },
+    onPoseResolved(pose)   { this.currentPose = pose; },
     copyUrl() {
       if (!this.steemitUrl) return;
       navigator.clipboard.writeText(this.steemitUrl).then(() => {
@@ -1605,7 +1607,12 @@ const CreatureView = {
         <!-- Canvas render -->
         <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"
           @facing-resolved="onFacingResolved"
+          @pose-resolved="onPoseResolved"
         ></creature-canvas-component>
+        <div v-if="currentPose && !fossil"
+          style="font-size:0.75rem;color:#444;font-style:italic;margin:3px 0 0;letter-spacing:0.04em;">
+          {{ { standing:'🐾 standing', sitting:'🪑 sitting', sleeping:'💤 sleeping', alert:'👀 alert', playful:'🎉 playful' }[currentPose] }}
+        </div>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
           🦴 This creature has fossilised. Its genome is preserved on-chain.
         </div>
