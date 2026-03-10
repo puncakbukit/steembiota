@@ -1620,6 +1620,29 @@ const CreatureView = {
           🦴 This creature has fossilised. Its genome is preserved on-chain.
         </div>
 
+        <!-- Feed panel -->
+        <feeding-panel-component
+          :username="username"
+          :initial-url="steemitUrl"
+          :unicode-art="unicodeArt"
+          @notify="(msg,type) => notify(msg,type)"
+          @feed-state-updated="onFeedStateUpdated"
+        ></feeding-panel-component>
+
+        <!-- Activity panel (Play + Walk) -->
+        <activity-panel-component
+          :username="username"
+          :creature-author="author"
+          :creature-permlink="permlink"
+          :creature-name="name"
+          :unicode-art="unicodeArt"
+          :initial-activity-state="activityState"
+          @notify="(msg,type) => notify(msg,type)"
+          @activity-state-updated="onActivityStateUpdated"
+        ></activity-panel-component>
+
+        <hr/>
+
         <!-- Unicode render -->
         <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
         <pre :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
@@ -1696,27 +1719,6 @@ const CreatureView = {
         </div>
 
         <hr/>
-
-        <!-- Feed panel -->
-        <feeding-panel-component
-          :username="username"
-          :initial-url="steemitUrl"
-          :unicode-art="unicodeArt"
-          @notify="(msg,type) => notify(msg,type)"
-          @feed-state-updated="onFeedStateUpdated"
-        ></feeding-panel-component>
-
-        <!-- Activity panel (Play + Walk) -->
-        <activity-panel-component
-          :username="username"
-          :creature-author="author"
-          :creature-permlink="permlink"
-          :creature-name="name"
-          :unicode-art="unicodeArt"
-          :initial-activity-state="activityState"
-          @notify="(msg,type) => notify(msg,type)"
-          @activity-state-updated="onActivityStateUpdated"
-        ></activity-panel-component>
 
         <!-- Breed panel — Parent A pre-filled -->
         <breeding-panel-component
