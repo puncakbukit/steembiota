@@ -140,8 +140,10 @@ function parseSteembiotaPosts(rawPosts) {
       genome:         sb.genome,
       age,
       lifecycleStage: getLifecycleStage(age, sb.genome),
+      type:           sb.type || "founder",
       parentA:        sb.parentA || null,
       parentB:        sb.parentB || null,
+      speciated:      sb.speciated || false,
       created:        p.created || ""
     });
   }
@@ -1353,8 +1355,11 @@ const CreatureView = {
       feedState:     null,
       feedEvents:    null,
       alreadyFedToday: false,
-      activityState: null,   // { playEvents, walkEvents, moodBoost, vitalityBoost, ... }
-      reactionTrigger: 0,    // incremented on feed/play/walk success to trigger canvas animation
+      activityState: null,
+      reactionTrigger: 0,
+      creatureType:  null,   // "founder" | "offspring"
+      speciated:     false,  // true if offspring caused a genus split
+      mutated:       false,  // true if offspring had a mutation
       parentA:       null,
       parentB:       null,
       siblings:      [],
@@ -1362,7 +1367,7 @@ const CreatureView = {
       kinshipLoading: false,
       now:           new Date(),
       facingRight:   false,
-      currentPose:   null,   // emitted from canvas component on mount
+      currentPose:   null,
       urlCopied:     false
     };
   },
@@ -1388,6 +1393,43 @@ const CreatureView = {
     breedPrefilledUrl() {
       if (!this.author || !this.permlink) return null;
       return "https://steemit.com/@" + this.author + "/" + this.permlink;
+    },
+    // ── Provenance analysis ──────────────────────────────────────
+    // Returns one of: "offspring" | "founder" | "suspicious-founder" | "broken-offspring"
+    provenanceStatus() {
+      if (!this.genome) return null;
+      const isOffspring = this.creatureType === "offspring";
+      const hasParents  = !!(this._rawParentA || this._rawParentB);
+      if (isOffspring && hasParents)  return "offspring";
+      if (isOffspring && !hasParents) return "broken-offspring";  // claims offspring, no parent links
+      // Founder — check for suspiciously optimal genome
+      // A legitimately random founder is very unlikely to have all four visual genes
+      // (MOR 0–9, APP 0–9, ORN 0–9999, CLR 0–359) simultaneously near their
+      // extreme values, OR to have LIF at the absolute min or max of its range (80 or 160).
+      const g = this.genome;
+      const suspicionCount =
+        (g.MOR >= 8 ? 1 : 0) +          // top 20% morphology
+        (g.APP >= 8 ? 1 : 0) +          // top 20% appearance
+        (g.MUT === 5 ? 1 : 0) +         // maximum mutation rate (very rare naturally)
+        (g.LIF >= 155 || g.LIF <= 82 ? 1 : 0) +  // near-extreme lifespan
+        (g.ORN >= 9800 ? 1 : 0);        // top 2% ornament
+      if (suspicionCount >= 3) return "suspicious-founder";
+      return "founder";
+    },
+    provenanceBadge() {
+      switch (this.provenanceStatus) {
+        case "offspring":
+          if (this.speciated) return { icon: "⚡", label: "Speciation Event", color: "#ffb74d", border: "#e65100", bg: "#1a0f00" };
+          if (this.mutated)   return { icon: "🧬", label: "Bred — Mutation", color: "#80deea", border: "#006064", bg: "#001a1c" };
+          return                       { icon: "🧬", label: "Bred Offspring",  color: "#80deea", border: "#00838f", bg: "#001a1c" };
+        case "broken-offspring":
+          return { icon: "⚠", label: "Offspring — Missing Parent Links", color: "#ff8a80", border: "#b71c1c", bg: "#1a0000" };
+        case "suspicious-founder":
+          return { icon: "⚠", label: "Unverified Origin", color: "#ffb74d", border: "#e65100", bg: "#1a0e00" };
+        case "founder":
+        default:
+          return { icon: "🌱", label: "Origin Creature", color: "#a5d6a7", border: "#2e7d32", bg: "#0d1a0d" };
+      }
     },
     isFertile() {
       if (!this.genome || !this.postAge) return false;
@@ -1425,8 +1467,11 @@ const CreatureView = {
         if (!meta.steembiota) throw new Error("This post is not a SteemBiota creature.");
 
         const sb       = meta.steembiota;
-        this.genome    = sb.genome;
-        this.name      = sb.name || author;
+        this.genome        = sb.genome;
+        this.name          = sb.name || author;
+        this.creatureType  = sb.type || "founder";
+        this.speciated     = sb.speciated || false;
+        this.mutated       = sb.mutated   || false;
         this.postAge   = calculateAge(post.created);   // live age from publish timestamp
 
         // Load feed events + activity events from replies
@@ -1633,6 +1678,35 @@ const CreatureView = {
                 borderRadius:'12px', padding:'2px 10px'
               }"
             >🦮 {{ activityState.vitalityLabel }}</span>
+
+            <!-- Provenance badge -->
+            <span v-if="provenanceBadge" :style="{
+              fontSize:'0.80rem', fontWeight:'bold',
+              color: provenanceBadge.color,
+              border: '1px solid ' + provenanceBadge.border,
+              background: provenanceBadge.bg,
+              borderRadius:'12px', padding:'2px 10px'
+            }">{{ provenanceBadge.icon }} {{ provenanceBadge.label }}</span>
+          </div>
+
+          <!-- Provenance warning banner — shown for suspicious or broken creatures -->
+          <div v-if="provenanceStatus === 'suspicious-founder'" style="
+            margin-top:10px; padding:10px 14px; border-radius:8px;
+            background:#1a0e00; border:1px solid #e65100;
+            font-size:12px; color:#ffb74d; text-align:left; max-width:520px; margin-left:auto; margin-right:auto;">
+            <strong>⚠ Unverified Origin</strong><br/>
+            This creature was posted as an origin creature but has an unusually optimal genome.
+            Legitimate founders are randomly generated — genomes with multiple maxed-out traits
+            may have been manually crafted or copied from another creature.
+            Verify this creature's authenticity before interacting with it.
+          </div>
+          <div v-if="provenanceStatus === 'broken-offspring'" style="
+            margin-top:10px; padding:10px 14px; border-radius:8px;
+            background:#1a0000; border:1px solid #b71c1c;
+            font-size:12px; color:#ff8a80; text-align:left; max-width:520px; margin-left:auto; margin-right:auto;">
+            <strong>⚠ Missing Parent Links</strong><br/>
+            This post claims to be a bred offspring but contains no parent references in its metadata.
+            Legitimate offspring always record both parent posts. This creature's lineage cannot be verified.
           </div>
         </div>
 

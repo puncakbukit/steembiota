@@ -1354,7 +1354,23 @@ const CreatureCardComponent = {
       return s ? s.icon + " " + s.name : "";
     },
     routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; },
-    steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; }
+    steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; },
+    provenanceBadge() {
+      const type       = this.post.type || "founder";
+      const hasParents = !!(this.post.parentA || this.post.parentB);
+      if (type === "offspring" && hasParents)
+        return { icon: this.post.speciated ? "⚡" : "🧬", label: this.post.speciated ? "Speciation" : "Bred", color: "#80deea" };
+      if (type === "offspring" && !hasParents)
+        return { icon: "⚠", label: "No parents", color: "#ff8a80" };
+      // founder — check suspicious genome
+      const g = this.post.genome;
+      const suspicion = (g.MOR >= 8 ? 1 : 0) + (g.APP >= 8 ? 1 : 0) +
+                        (g.MUT === 5 ? 1 : 0) + (g.LIF >= 155 || g.LIF <= 82 ? 1 : 0) +
+                        (g.ORN >= 9800 ? 1 : 0);
+      if (suspicion >= 3)
+        return { icon: "⚠", label: "Unverified", color: "#ffb74d" };
+      return { icon: "🌱", label: "Origin", color: "#a5d6a7" };
+    }
   },
   methods: {
     copyUrl(e) {
@@ -1405,7 +1421,12 @@ const CreatureCardComponent = {
           <span style="color:#444;">·</span>
           <span :style="{ color: stageColor }">{{ stageLabel }}</span>
         </div>
-        <div style="font-size:0.65rem;color:#3a3a3a;margin-top:2px;">@{{ post.author }}</div>
+        <div style="font-size:0.65rem;margin-top:3px;display:flex;gap:4px;justify-content:center;align-items:center;flex-wrap:wrap;">
+          <span style="color:#3a3a3a;">@{{ post.author }}</span>
+          <span :style="{ color: provenanceBadge.color, fontSize:'0.63rem' }">
+            {{ provenanceBadge.icon }} {{ provenanceBadge.label }}
+          </span>
+        </div>
         <button
           @click="copyUrl"
           :style="{
