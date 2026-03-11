@@ -155,7 +155,7 @@ function parseSteembiotaPosts(rawPosts) {
 // Derives XP from on-chain activity and maps it to a named rank.
 // Sources:
 //   - Founder creatures published (type:"founder")  → 100 XP each
-//   - Offspring bred and published (type:"offspring") → 60 XP each
+//   - Offspring bred and published (type:"offspring") → 500 XP each
 //   - Feed replies sent (type:"feed")               → 10 XP each
 //   - Unique genera contributed (distinct GEN values in own creatures) → 25 XP each
 //   - Speciation event in own offspring             → 75 XP bonus each
@@ -208,7 +208,7 @@ function computeUserLevel(posts, comments) {
   }
 
   const xpFounders   = founders   * 100;
-  const xpOffspring  = offspring  * 60;
+  const xpOffspring  = offspring  * 500;
   const xpFeeds      = feedsGiven * 10;
   const xpGenera     = genera.size * 25;
   const xpSpeciation = speciated   * 75;
@@ -1771,7 +1771,7 @@ function computeLeaderboardEntries(rawPosts) {
   return Object.entries(byAuthor).map(([author, d]) => {
     const xp =
       d.founders   * 100 +
-      d.offspring  * 60  +
+      d.offspring  * 500 +
       d.genera.size * 25 +
       d.speciated  * 75;
     const rank = USER_RANKS.find(r => xp >= r.minXp) || USER_RANKS[USER_RANKS.length - 1];
