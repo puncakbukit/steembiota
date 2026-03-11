@@ -737,8 +737,7 @@ const HomeView = {
     CreatureCardComponent,
     GenomeTableComponent,
     LoadingSpinnerComponent,
-    BreedingPanelComponent,
-    FeedingPanelComponent
+    BreedingPanelComponent
   },
   data() {
     return {
@@ -917,12 +916,7 @@ const HomeView = {
         <hr/>
       </div>
 
-      <!-- Feed + Breed panels -->
-      <feeding-panel-component
-        :username="username"
-        @notify="(msg,type) => notify(msg,type)"
-        @feed-state-updated="(fs) => { feedState = fs }"
-      ></feeding-panel-component>
+      <!-- Breed panel -->
       <breeding-panel-component
         :username="username"
         @notify="(msg,type) => notify(msg,type)"
@@ -1344,7 +1338,6 @@ const CreatureView = {
     CreatureCardComponent,
     GenomeTableComponent,
     LoadingSpinnerComponent,
-    FeedingPanelComponent,
     ActivityPanelComponent,
     BreedingPanelComponent
   },
@@ -1639,29 +1632,19 @@ const CreatureView = {
           🦴 This creature has fossilised. Its genome is preserved on-chain.
         </div>
 
-        <!-- Feed panel -->
-        <feeding-panel-component
-          :username="username"
-          :unicode-art="unicodeArt"
-          :ctx-author="author"
-          :ctx-permlink="permlink"
-          :ctx-name="name"
-          :ctx-feed-state="feedState"
-          :ctx-feed-events="feedEvents"
-          :ctx-already-fed="alreadyFedToday"
-          @notify="(msg,type) => notify(msg,type)"
-          @feed-state-updated="onFeedStateUpdated"
-        ></feeding-panel-component>
-
-        <!-- Activity panel (Play + Walk) -->
+        <!-- Activity panel (Feed + Play + Walk) -->
         <activity-panel-component
           :username="username"
           :creature-author="author"
           :creature-permlink="permlink"
           :creature-name="name"
           :unicode-art="unicodeArt"
+          :ctx-feed-state="feedState"
+          :ctx-feed-events="feedEvents"
+          :ctx-already-fed="alreadyFedToday"
           :initial-activity-state="activityState"
           @notify="(msg,type) => notify(msg,type)"
+          @feed-state-updated="onFeedStateUpdated"
           @activity-state-updated="onActivityStateUpdated"
         ></activity-panel-component>
 
@@ -2197,7 +2180,6 @@ vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
 vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
-vueApp.component("FeedingPanelComponent",       FeedingPanelComponent);
 vueApp.component("ActivityPanelComponent",      ActivityPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
 vueApp.component("LeaderboardView",             LeaderboardView);

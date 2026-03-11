@@ -1556,67 +1556,60 @@ const GlobalProfileBannerComponent = {
 };
 
 // ============================================================
-// FeedingPanelComponent
-// Two modes:
+// ActivityPanelComponent
+// Unified panel for all three creature interactions:
+//   Feed  🍃 → Health boost → lifespan + fertility bonuses
+//   Play  🎮 → Mood boost   → wider effective fertility window
+//   Walk  🦮 → Vitality     → extended effective lifespan
 //
-//   Default (HomeView): no ctx* props passed — shows URL input + Load button
-//     so users can find any creature and feed it.
-//
-//   Creature context (CreatureView): ctxAuthor (and other ctx* props) are passed
-//     directly — URL input and Load button are hidden. Health bar, feed stats,
-//     food selector, and feed button are shown using the page's creature data.
-//
-// Anti-spam (read-side): parseFeedEvents() enforces
-//   — 1 feed per (feeder, UTC-day) pair
-//   — 20 total feeds per creature lifetime
-//
-// Owner feeds count 3× toward health; community feeds count 1×.
+// Feed anti-spam: 1 feed per (feeder, UTC-day), 20 total lifetime.
+// Play/Walk anti-spam: 1 each per (user, UTC-day), 15 total each.
 // ============================================================
-const FeedingPanelComponent = {
-  name: "FeedingPanelComponent",
+const ActivityPanelComponent = {
+  name: "ActivityPanelComponent",
   props: {
-    username:          String,
-    initialUrl:        { type: String, default: "" },
-    unicodeArt:        { type: String, default: "" },
-    // — creature-mode props (CreatureView passes these; their presence activates creature mode) —
-    ctxAuthor:         { type: String,  default: null },
-    ctxPermlink:       { type: String,  default: null },
-    ctxName:           { type: String,  default: null },
-    ctxFeedState:      { type: Object,  default: null },
-    ctxFeedEvents:     { type: Object,  default: null },
-    ctxAlreadyFed:     { type: Boolean, default: false },
+    username:              String,
+    creatureAuthor:        { type: String, default: null },
+    creaturePermlink:      { type: String, default: null },
+    creatureName:          { type: String, default: null },
+    unicodeArt:            { type: String, default: "" },
+    // Feed state (passed from CreatureView)
+    ctxFeedState:          { type: Object,  default: null },
+    ctxFeedEvents:         { type: Object,  default: null },
+    ctxAlreadyFed:         { type: Boolean, default: false },
+    initialActivityState:  { type: Object,  default: null }
   },
-  emits: ["notify", "feed-state-updated"],
+  emits: ["notify", "feed-state-updated", "activity-state-updated"],
   data() {
-    const inCreatureCtx = !!this.ctxAuthor;
     return {
-      // URL-mode state (unused when ctxAuthor is provided)
-      postUrl:          this.initialUrl || "",
-      loading:          false,
-      loadError:        "",
-      // Local creature context — seeded from ctx* props when in creature context
-      creatureAuthor:   inCreatureCtx ? this.ctxAuthor   : null,
-      creaturePermlink: inCreatureCtx ? this.ctxPermlink : null,
-      creatureName:     inCreatureCtx ? this.ctxName     : null,
-      creatureGenome:   null,
-      feedEvents:       inCreatureCtx ? this.ctxFeedEvents : null,
-      feedState:        inCreatureCtx ? this.ctxFeedState  : null,
-      alreadyFedToday:  inCreatureCtx ? this.ctxAlreadyFed : false,
-      // Shared
-      foodType:         "nectar",
-      publishing:       false,
+      // Feed state
+      feedEvents:         this.ctxFeedEvents || null,
+      feedState:          this.ctxFeedState  || null,
+      alreadyFedToday:    this.ctxAlreadyFed || false,
+      foodType:           "nectar",
+      publishingFeed:     false,
+      // Play / Walk state
+      activityState:      this.initialActivityState || null,
+      publishingPlay:     false,
+      publishingWalk:     false,
+      alreadyPlayedToday: this.initialActivityState?.alreadyPlayedToday || false,
+      alreadyWalkedToday: this.initialActivityState?.alreadyWalkedToday || false,
     };
   },
   watch: {
-    // When creature context is provided the parent may push updated state after a feed
-    ctxFeedState(val)  { if (this.ctxAuthor && val) this.feedState  = val; },
-    ctxFeedEvents(val) { if (this.ctxAuthor && val) this.feedEvents = val; },
-    ctxAlreadyFed(val) { if (this.ctxAuthor)        this.alreadyFedToday = val; },
-  },
-  created() {
-    if (!this.ctxAuthor && this.initialUrl) this.loadCreature();
+    ctxFeedState(val)  { if (val) this.feedState  = val; },
+    ctxFeedEvents(val) { if (val) this.feedEvents = val; },
+    ctxAlreadyFed(val) { this.alreadyFedToday = val; },
+    initialActivityState(val) {
+      if (val) {
+        this.activityState      = val;
+        this.alreadyPlayedToday = val.alreadyPlayedToday || false;
+        this.alreadyWalkedToday = val.alreadyWalkedToday || false;
+      }
+    }
   },
   computed: {
+    // ── Feed computed ──
     foodOptions() {
       return [
         { value: "nectar",  label: "🍯 Nectar  — +1 day lifespan" },
@@ -1637,87 +1630,67 @@ const FeedingPanelComponent = {
       return !this.alreadyFedToday &&
              !!this.creatureAuthor &&
              !!this.username &&
-             !this.publishing &&
+             !this.publishingFeed &&
              this.feedEvents &&
              this.feedEvents.total < 20;
     },
     feedButtonLabel() {
-      if (this.publishing)      return "Feeding…";
-      if (!this.username)       return "Log in to feed";
-      if (!this.creatureAuthor) return "Load a creature first";
-      if (this.alreadyFedToday) return "Already fed today ✓";
+      if (this.publishingFeed)   return "Feeding…";
+      if (!this.username)        return "Log in to feed";
+      if (!this.creatureAuthor)  return "No creature loaded";
+      if (this.alreadyFedToday)  return "Already fed today ✓";
       if (this.feedEvents && this.feedEvents.total >= 20) return "Feed cap reached (20/20)";
       return "🍃 Feed this creature";
+    },
+    // ── Play / Walk computed ──
+    canPlay() {
+      return !!this.username && !!this.creatureAuthor && !this.publishingPlay &&
+             !this.alreadyPlayedToday &&
+             (!this.activityState || this.activityState.playTotal < 15);
+    },
+    canWalk() {
+      return !!this.username && !!this.creatureAuthor && !this.publishingWalk &&
+             !this.alreadyWalkedToday &&
+             (!this.activityState || this.activityState.walkTotal < 15);
+    },
+    playButtonLabel() {
+      if (this.publishingPlay)     return "Playing…";
+      if (!this.username)          return "Log in to play";
+      if (this.alreadyPlayedToday) return "Played today ✓";
+      if (this.activityState && this.activityState.playTotal >= 15) return "Play cap reached (15/15)";
+      return "🎮 Play with creature";
+    },
+    walkButtonLabel() {
+      if (this.publishingWalk)     return "Walking…";
+      if (!this.username)          return "Log in to walk";
+      if (this.alreadyWalkedToday) return "Walked today ✓";
+      if (this.activityState && this.activityState.walkTotal >= 15) return "Walk cap reached (15/15)";
+      return "🦮 Take for a walk";
+    },
+    moodBarWidth() {
+      if (!this.activityState) return "0%";
+      return Math.round(this.activityState.moodPct * 100) + "%";
+    },
+    vitalityBarWidth() {
+      if (!this.activityState) return "0%";
+      return Math.round(this.activityState.vitalityPct * 100) + "%";
     }
   },
   methods: {
-    async loadCreature() {
-      this.loadError        = "";
-      this.creatureAuthor   = null;
-      this.creaturePermlink = null;
-      this.creatureName     = null;
-      this.creatureGenome   = null;
-      this.feedEvents       = null;
-      this.feedState        = null;
-      this.alreadyFedToday  = false;
-
-      const url = this.postUrl.trim();
-      if (!url) { this.loadError = "Please enter a creature post URL."; return; }
-
-      this.loading = true;
-      try {
-        const { author, permlink } = parseSteemUrl(url);
-        const post = await fetchPost(author, permlink);
-        if (!post || !post.author) throw new Error("Post not found.");
-
-        let meta = {};
-        try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
-        if (!meta.steembiota) throw new Error("This post does not appear to be a SteemBiota creature.");
-
-        this.creatureAuthor   = author;
-        this.creaturePermlink = permlink;
-        this.creatureName     = meta.steembiota.name || author;
-        this.creatureGenome   = meta.steembiota.genome || null;
-
-        const replies = await fetchAllReplies(author, permlink);
-        this.feedEvents = parseFeedEvents(replies, author);
-        this.feedState  = computeFeedState(this.feedEvents, meta.steembiota.genome || { LIF: 100 });
-        this.$emit("feed-state-updated", this.feedState);
-
-        if (this.username) {
-          const todayUTC = new Date().toISOString().slice(0, 10);
-          this.alreadyFedToday = replies.some(r => {
-            if (r.author !== this.username) return false;
-            let m = {}; try { m = JSON.parse(r.json_metadata || "{}"); } catch {}
-            if (!m.steembiota || m.steembiota.type !== "feed") return false;
-            const d = r.created.endsWith("Z") ? r.created : r.created + "Z";
-            return new Date(d).toISOString().slice(0, 10) === todayUTC;
-          });
-        }
-      } catch(e) {
-        this.loadError = e.message || String(e);
-      }
-      this.loading = false;
-    },
-
-    async feedCreature() {
+    // ── Feed ──
+    feedCreature() {
       if (!this.canFeed) return;
-      if (!window.steem_keychain) {
-        this.$emit("notify", "Steem Keychain is not installed.", "error");
-        return;
-      }
-      const artSnapshot = this.unicodeArt ||
-        (this.creatureGenome ? buildUnicodeArt(this.creatureGenome, 0, this.feedState) : "");
-      this.publishing = true;
+      if (!window.steem_keychain) { this.$emit("notify", "Steem Keychain is not installed.", "error"); return; }
+      this.publishingFeed = true;
       publishFeed(
         this.username,
         this.creatureAuthor,
         this.creaturePermlink,
         this.creatureName,
         this.foodType,
-        artSnapshot,
+        this.unicodeArt,
         (response) => {
-          this.publishing = false;
+          this.publishingFeed = false;
           if (response.success) {
             const feeder  = this.username;
             const isOwner = feeder === this.creatureAuthor;
@@ -1741,181 +1714,10 @@ const FeedingPanelComponent = {
           }
         }
       );
-    }
-  },
-
-  template: `
-    <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
-      <h3 style="color:#66bb6a;margin:0 0 12px;">🍃 Feed</h3>
-
-      <!-- Login gate -->
-      <div v-if="!username" style="text-align:center;padding:18px 0;color:#555;font-size:13px;">
-        🔒 Log in to feed creatures.
-      </div>
-
-      <template v-else>
-
-        <!-- URL input — only shown when no creature context is provided (e.g. HomeView) -->
-        <template v-if="!ctxAuthor">
-          <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
-            <input
-              v-model="postUrl"
-              type="text"
-              placeholder="Creature post URL (steemit.com/@user/permlink)"
-              style="font-size:13px;"
-              @keydown.enter="loadCreature"
-            />
-            <button @click="loadCreature" :disabled="loading" style="background:#1a2e1a;">
-              {{ loading ? "Loading…" : "🔍 Load Creature" }}
-            </button>
-          </div>
-          <div v-if="loadError" style="color:#ff8a80;font-size:13px;margin-top:8px;">
-            ⚠ {{ loadError }}
-          </div>
-        </template>
-
-        <!-- Feed UI — shown once creature is loaded (or always in creature-mode) -->
-        <div v-if="feedState" style="margin-top:12px;">
-
-          <!-- Health bar -->
-          <div style="max-width:320px;margin:0 auto 12px;">
-            <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
-              <span>Health</span>
-              <span>{{ feedState.symbol }} {{ feedState.label }}</span>
-            </div>
-            <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;height:10px;overflow:hidden;">
-              <div :style="{
-                width: healthBarWidth, height: '100%',
-                background: healthBarColor, borderRadius: '6px',
-                transition: 'width 0.4s ease'
-              }"></div>
-            </div>
-          </div>
-
-          <!-- Feed stats -->
-          <div style="font-size:12px;color:#666;margin-bottom:12px;">
-            Total feeds: <strong style="color:#aaa;">{{ feedEvents.total }}/20</strong>
-            &nbsp;·&nbsp;
-            Owner: <strong style="color:#aaa;">{{ feedEvents.ownerFeeds }}</strong>
-            &nbsp;·&nbsp;
-            Community: <strong style="color:#aaa;">{{ feedEvents.communityFeeds }}</strong>
-            <template v-if="feedState.lifespanBonus > 0">
-              &nbsp;·&nbsp;
-              Lifespan +<strong style="color:#66bb6a;">{{ feedState.lifespanBonus }}d</strong>
-            </template>
-            <template v-if="feedState.fertilityBoost > 0">
-              &nbsp;·&nbsp;
-              Fertility +<strong style="color:#f48fb1;">{{ Math.round(feedState.fertilityBoost * 100) }}%</strong>
-            </template>
-          </div>
-
-          <!-- Food selector -->
-          <div style="display:flex;flex-direction:column;gap:6px;max-width:320px;margin:0 auto 10px;">
-            <div v-for="opt in foodOptions" :key="opt.value"
-                 style="display:flex;align-items:center;gap:8px;cursor:pointer;"
-                 @click="foodType = opt.value">
-              <div :style="{
-                width:'14px', height:'14px', borderRadius:'50%',
-                border: '2px solid ' + (foodType === opt.value ? '#66bb6a' : '#444'),
-                background: foodType === opt.value ? '#2e7d32' : 'transparent',
-                flexShrink: 0
-              }"></div>
-              <span :style="{ fontSize:'13px', color: foodType === opt.value ? '#eee' : '#888' }">{{ opt.label }}</span>
-            </div>
-          </div>
-
-          <!-- Feed button -->
-          <button @click="feedCreature" :disabled="!canFeed" style="background:#1b3a1b;">
-            {{ feedButtonLabel }}
-          </button>
-          <p v-if="alreadyFedToday" style="color:#555;font-size:12px;margin:4px 0;">
-            Come back tomorrow to feed again.
-          </p>
-
-        </div>
-
-      </template>
-    </div>
-  `
-};
-
-// ============================================================
-// ActivityPanelComponent
-// Lets users play with or walk a creature — both broadcast as
-// reply posts on-chain. Effects are computed client-side.
-//
-// Play  🎮 → Mood boost → wider effective fertility window
-// Walk  🦮 → Vitality boost → extended effective lifespan
-//
-// Anti-spam: 1 play + 1 walk per user per UTC-day per creature.
-// Cap: 15 plays, 15 walks per creature lifetime.
-// ============================================================
-const ActivityPanelComponent = {
-  name: "ActivityPanelComponent",
-  props: {
-    username:              String,
-    creatureAuthor:        { type: String, default: null },
-    creaturePermlink:      { type: String, default: null },
-    creatureName:          { type: String, default: null },
-    unicodeArt:            { type: String, default: "" },
-    initialActivityState:  { type: Object, default: null }
-  },
-  emits: ["notify", "activity-state-updated"],
-  data() {
-    return {
-      activityState:      this.initialActivityState || null,
-      publishingPlay:     false,
-      publishingWalk:     false,
-      alreadyPlayedToday: this.initialActivityState?.alreadyPlayedToday || false,
-      alreadyWalkedToday: this.initialActivityState?.alreadyWalkedToday || false,
-    };
-  },
-  watch: {
-    initialActivityState(val) {
-      if (val) {
-        this.activityState      = val;
-        this.alreadyPlayedToday = val.alreadyPlayedToday || false;
-        this.alreadyWalkedToday = val.alreadyWalkedToday || false;
-      }
-    }
-  },
-  computed: {
-    canPlay() {
-      return !!this.username && !!this.creatureAuthor && !this.publishingPlay &&
-             !this.alreadyPlayedToday &&
-             (!this.activityState || this.activityState.playTotal < 15);
     },
-    canWalk() {
-      return !!this.username && !!this.creatureAuthor && !this.publishingWalk &&
-             !this.alreadyWalkedToday &&
-             (!this.activityState || this.activityState.walkTotal < 15);
-    },
-    playButtonLabel() {
-      if (this.publishingPlay) return "Playing…";
-      if (!this.username)      return "Log in to play";
-      if (this.alreadyPlayedToday) return "Played today ✓";
-      if (this.activityState && this.activityState.playTotal >= 15) return "Play cap reached (15/15)";
-      return "🎮 Play with creature";
-    },
-    walkButtonLabel() {
-      if (this.publishingWalk) return "Walking…";
-      if (!this.username)      return "Log in to walk";
-      if (this.alreadyWalkedToday) return "Walked today ✓";
-      if (this.activityState && this.activityState.walkTotal >= 15) return "Walk cap reached (15/15)";
-      return "🦮 Take for a walk";
-    },
-    moodBarWidth() {
-      if (!this.activityState) return "0%";
-      return Math.round(this.activityState.moodPct * 100) + "%";
-    },
-    vitalityBarWidth() {
-      if (!this.activityState) return "0%";
-      return Math.round(this.activityState.vitalityPct * 100) + "%";
-    }
-  },
-  methods: {
+
+    // ── Play / Walk optimistic update ──
     _optimisticUpdate(type) {
-      // Mutate known counters directly for optimistic UI update.
       const s = this.activityState || {
         playTotal: 0, playOwner: 0, playCommunity: 0,
         walkTotal: 0, walkOwner: 0, walkCommunity: 0,
@@ -2004,23 +1806,41 @@ const ActivityPanelComponent = {
 
   template: `
     <div style="margin-top:32px;padding-top:24px;border-top:1px solid #333;">
-      <h3 style="color:#b39ddb;margin:0 0 12px;">🎮 Activities</h3>
+      <h3 style="color:#b39ddb;margin:0 0 12px;">🌿 Activities</h3>
 
       <!-- Login gate -->
       <div v-if="!username" style="text-align:center;padding:18px 0;color:#555;font-size:13px;">
-        🔒 <a href="#" @click.prevent style="color:#b39ddb;text-decoration:none;cursor:default;">Log in</a> to do activities with creatures.
+        🔒 Log in to do activities with this creature.
       </div>
 
       <template v-else>
-        <!-- Stats row — only shown once activityState has data -->
-        <div v-if="activityState && (activityState.playTotal > 0 || activityState.walkTotal > 0)"
-          style="max-width:520px;margin:0 auto 18px;display:flex;flex-direction:column;gap:10px;">
 
-          <!-- Mood bar -->
+        <!-- ── Health bar (feed stats) ── -->
+        <div v-if="feedState" style="max-width:320px;margin:0 auto 16px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
+            <span>🍃 Health <span v-if="feedState.label" style="color:#a5d6a7;">({{ feedState.symbol }} {{ feedState.label }})</span></span>
+            <span>{{ feedEvents ? feedEvents.total : 0 }}/20 feeds
+              <template v-if="feedState.lifespanBonus > 0">
+                · Lifespan +<strong style="color:#66bb6a;">{{ feedState.lifespanBonus }}d</strong>
+              </template>
+              <template v-if="feedState.fertilityBoost > 0">
+                · Fertility +<strong style="color:#f48fb1;">{{ Math.round(feedState.fertilityBoost * 100) }}%</strong>
+              </template>
+            </span>
+          </div>
+          <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;height:8px;overflow:hidden;">
+            <div :style="{ width: healthBarWidth, height:'100%', background: healthBarColor, borderRadius:'6px', transition:'width 0.4s ease' }"></div>
+          </div>
+        </div>
+
+        <!-- ── Mood + Vitality bars (activity stats) ── -->
+        <div v-if="activityState && (activityState.playTotal > 0 || activityState.walkTotal > 0)"
+          style="max-width:320px;margin:0 auto 16px;display:flex;flex-direction:column;gap:10px;">
+
           <div>
             <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
               <span>🎮 Mood <span v-if="activityState.moodLabel" style="color:#ce93d8;">({{ activityState.moodLabel }})</span></span>
-              <span style="color:#888;">{{ activityState.playTotal }}/15 plays
+              <span>{{ activityState.playTotal }}/15 plays
                 <template v-if="activityState.fertilityExtension > 0">
                   · Fertility +<strong style="color:#ce93d8;">{{ activityState.fertilityExtension }}d</strong>
                 </template>
@@ -2031,11 +1851,10 @@ const ActivityPanelComponent = {
             </div>
           </div>
 
-          <!-- Vitality bar -->
           <div>
             <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px;">
               <span>🦮 Vitality <span v-if="activityState.vitalityLabel" style="color:#80cbc4;">({{ activityState.vitalityLabel }})</span></span>
-              <span style="color:#888;">{{ activityState.walkTotal }}/15 walks
+              <span>{{ activityState.walkTotal }}/15 walks
                 <template v-if="activityState.vitalityLifespanBonus > 0">
                   · Lifespan +<strong style="color:#80cbc4;">{{ activityState.vitalityLifespanBonus }}d</strong>
                 </template>
@@ -2047,10 +1866,43 @@ const ActivityPanelComponent = {
           </div>
         </div>
 
-        <!-- Action buttons -->
-        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;max-width:520px;margin:0 auto;">
+        <!-- ── Three action cards: Feed · Play · Walk ── -->
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;max-width:640px;margin:0 auto;">
+
+          <!-- Feed card -->
+          <div style="flex:1;min-width:180px;background:#0d1f0d;border:1px solid #1b5e20;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.2rem;margin-bottom:4px;">🍃</div>
+            <div style="font-size:13px;font-weight:bold;color:#a5d6a7;margin-bottom:4px;">Feed</div>
+            <div style="font-size:11px;color:#555;margin-bottom:10px;">Boosts health · lifespan &amp; fertility</div>
+            <!-- Food selector -->
+            <div style="display:flex;flex-direction:column;gap:5px;text-align:left;margin-bottom:10px;">
+              <div v-for="opt in foodOptions" :key="opt.value"
+                   style="display:flex;align-items:center;gap:6px;cursor:pointer;"
+                   @click="foodType = opt.value">
+                <div :style="{
+                  width:'12px', height:'12px', borderRadius:'50%', flexShrink:0,
+                  border: '2px solid ' + (foodType === opt.value ? '#66bb6a' : '#333'),
+                  background: foodType === opt.value ? '#2e7d32' : 'transparent'
+                }"></div>
+                <span :style="{ fontSize:'11px', color: foodType === opt.value ? '#ccc' : '#666' }">{{ opt.label }}</span>
+              </div>
+            </div>
+            <button
+              @click="feedCreature"
+              :disabled="!canFeed"
+              :style="{
+                width:'100%', padding:'7px 0', fontSize:'12px',
+                background: canFeed ? '#1b5e20' : '#1a1a1a',
+                color: canFeed ? '#c8e6c9' : '#444',
+                border: '1px solid ' + (canFeed ? '#2e7d32' : '#2a2a2a'),
+                borderRadius:'6px', cursor: canFeed ? 'pointer' : 'default'
+              }"
+            >{{ feedButtonLabel }}</button>
+            <p v-if="alreadyFedToday" style="color:#555;font-size:11px;margin:6px 0 0;">Come back tomorrow!</p>
+          </div>
+
           <!-- Play card -->
-          <div style="flex:1;min-width:200px;background:#120a1e;border:1px solid #4a148c;border-radius:10px;padding:14px;text-align:center;">
+          <div style="flex:1;min-width:180px;background:#120a1e;border:1px solid #4a148c;border-radius:10px;padding:14px;text-align:center;">
             <div style="font-size:1.2rem;margin-bottom:4px;">🎮</div>
             <div style="font-size:13px;font-weight:bold;color:#ce93d8;margin-bottom:4px;">Play</div>
             <div style="font-size:11px;color:#555;margin-bottom:10px;">Boosts mood · widens fertility window</div>
@@ -2069,7 +1921,7 @@ const ActivityPanelComponent = {
           </div>
 
           <!-- Walk card -->
-          <div style="flex:1;min-width:200px;background:#071a17;border:1px solid #004d40;border-radius:10px;padding:14px;text-align:center;">
+          <div style="flex:1;min-width:180px;background:#071a17;border:1px solid #004d40;border-radius:10px;padding:14px;text-align:center;">
             <div style="font-size:1.2rem;margin-bottom:4px;">🦮</div>
             <div style="font-size:13px;font-weight:bold;color:#80cbc4;margin-bottom:4px;">Walk</div>
             <div style="font-size:11px;color:#555;margin-bottom:10px;">Boosts vitality · extends lifespan</div>
@@ -2086,6 +1938,7 @@ const ActivityPanelComponent = {
             >{{ walkButtonLabel }}</button>
             <p v-if="alreadyWalkedToday" style="color:#555;font-size:11px;margin:6px 0 0;">Come back tomorrow!</p>
           </div>
+
         </div>
       </template>
     </div>
