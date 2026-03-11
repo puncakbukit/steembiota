@@ -253,7 +253,7 @@ Every on-chain action earns XP for the acting user. XP totals are computed clien
 | Action | XP |
 |---|---|
 | Publish a founder creature | 100 |
-| Publish an offspring | 75 |
+| Publish an offspring | 500 |
 | Feed a creature (owner) | 20 |
 | Feed a creature (community) | 10 |
 | Play with a creature | 5 |
