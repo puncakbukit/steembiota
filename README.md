@@ -2,7 +2,7 @@
 
 **SteemBiota** is a decentralised life simulation built on the **Steem blockchain**.
 
-Creatures are generated from deterministic **genomes**, rendered procedurally as canvas paintings, and their entire existence — from birth through feeding, play, breeding, and fossilisation — is **permanently recorded on-chain**.
+Creatures are generated from deterministic **genomes**, rendered procedurally as canvas paintings, and their entire existence — from birth through feeding, play, walking, breeding, and fossilisation — is **permanently recorded on-chain**.
 
 🌐 **Live app:** https://puncakbukit.github.io/steembiota
 
@@ -60,7 +60,7 @@ Each GEN value maps to a stable procedurally-generated genus name (e.g. `GEN 42`
 
 ## Lifecycle
 
-Creature age is measured in **real days** since the post was published. Lifecycle stage is calculated as a percentage of LIF (adjusted for any lifespan bonuses from feeding and walk activity).
+Creature age is measured in **real days** since the post was published. Lifecycle stage is calculated as a percentage of LIF, adjusted for any lifespan bonuses from feeding and walk activity.
 
 | Stage | Age % | Icon |
 |---|---|---|
@@ -73,7 +73,7 @@ Creature age is measured in **real days** since the post was published. Lifecycl
 | Elder | 80–99% | 🍂 |
 | Fossil | 100%+ | 🦴 |
 
-Once the lifespan is exceeded the creature becomes a **Fossil**. Its genome and history remain permanently on-chain but it can no longer be fed, played with, or used in breeding.
+Once the lifespan is exceeded the creature becomes a **Fossil**. Its genome and history remain permanently on-chain but it can no longer be fed, played with, walked, or used in breeding.
 
 ---
 
@@ -110,7 +110,7 @@ On each page load the creature is assigned one of five poses at random. The pose
 | 🐾 Standing | Default upright side profile |
 | 👀 Alert | Torso raised, head lifted high, tail swept straight up |
 | 🎉 Playful | Play-bow: front legs stretched forward and low, rear elevated, tail up |
-| 🪑 Sitting | Torso tilted rear-down (~17°), folded haunches resting on the ground at the base of the tilted rear, front legs straight, tail wrapped under body |
+| 🪑 Sitting | Torso tilted rear-down (~17°), folded haunches resting on the ground, front legs straight, tail wrapped under body |
 | 💤 Sleeping | Body flat and low, head resting on ground, all legs tucked as flat pads, tail curled under, eye closed |
 
 The torso ellipse rotation, haunch/leg positions, head and neck angle, tail shape, and shadow scale are all adjusted per pose. Fossil creatures always render in a flat fossilised form regardless of pose. A small italic label below the canvas shows the active pose.
@@ -131,6 +131,10 @@ Expressions are derived from live game state (feedState + activityState) and re-
 | 😢 Sad | Completely unfed (health = 0%) | Pronounced frown, inward V-brow, teardrop below eye, pupil down |
 
 Play activity adds up to +25% to the effective health score before picking the expression, so a well-played but underfed creature can still appear happier. Expressions only appear from Toddler stage onward.
+
+### Reaction Animation
+
+Whenever a creature is successfully fed, played with, or walked, the canvas plays a short reaction sequence. The creature cycles through four pose+expression pairs (Standing→Alert→Playful→Sitting, paired with Alert→Alert→Excited→Happy), repeated 2–3 times at random, each step lasting 2–3 seconds. After the sequence finishes the creature returns to its resting pose and normal game-state expression. Any in-progress animation is cancelled and restarted if another interaction completes while it is running.
 
 ---
 
@@ -153,67 +157,69 @@ Art width grows with lifecycle stage (14 chars at Baby up to 36 at Young Adult, 
 
 ---
 
-## Feeding
+## Activities
 
-Any logged-in Steem user can feed a creature by loading its post page. Each feed is published as a blockchain reply.
+All three creature interactions — feeding, play, and walking — are presented in a single unified **🌿 Activities** panel on the creature page, directly below the canvas so reactions are visible while interacting. Each action is published as a blockchain reply. Fossil creatures cannot receive any activities.
 
-### Food Types
+### Feed 🍃
+
+Feeding improves the creature's **health**, which affects its canvas expression, lifespan, and fertility window.
+
+**Food types:**
 
 | Food | Lifespan bonus | Fertility boost |
 |---|---|---|
-| Nectar | +1 day per feed | none |
-| Fruit | +0.5 days per feed | +10% per feed |
-| Crystal | none | +5% per feed |
+| 🍯 Nectar | +1 day per feed | none |
+| 🍎 Fruit | +0.5 days per feed | +10% per feed |
+| 💎 Crystal | none | +5% per feed |
 
-### Feed Rules
+**Feed rules:**
 
 - Each feeder is counted at most once per UTC day (anti-spam).
 - Total feeds are capped at 20 per creature lifetime.
 - Owner feeds count 3× toward the health score; community feeds count 1×.
-- Maximum lifespan bonus: +20% of base LIF.
-- Maximum fertility boost from community feeding: +25%.
+- Maximum lifespan bonus from feeding: +20% of base LIF.
+- Maximum fertility boost from community feeding: +25% of the base window width.
 
-### Health States
+**Health states:**
 
 | State | Threshold |
 |---|---|
-| Thriving | 80%+ |
-| Well-fed | 55%+ |
-| Nourished | 30%+ |
-| Hungry | above 0% |
-| Unfed | 0% |
-
----
-
-## Activities — Play & Walk
-
-Beyond feeding, logged-in users can interact with a creature through two daily activities. Activity events are published as blockchain replies and scored separately from feed events.
+| ✨ Thriving | 80%+ |
+| ✦ Well-fed | 55%+ |
+| • Nourished | 30%+ |
+| · Hungry | above 0% |
+| · Unfed | 0% |
 
 ### Play 🎮
 
-Playing improves the creature's **mood**, which affects its face expression and extends its fertility window.
+Playing improves the creature's **mood**, which widens its effective fertility window and boosts its canvas expression.
 
-- Each player is counted at most once per UTC day (anti-spam). Cap: 15 play events.
+- Each player is counted at most once per UTC day (anti-spam). Lifetime cap: 15 play events.
 - Owner plays count 2×; community plays count 1×.
 - **Mood score** (0–100%) scales linearly from total weighted play count.
 - **Fertility extension**: up to +10 days added to each side of the fertility window at max mood.
+- Mood label shown as a purple badge in the creature page header.
 
 ### Walk 🦮
 
-Walking builds the creature's **vitality**, which extends its lifespan.
+Walking builds the creature's **vitality**, which extends its effective lifespan.
 
-- Same anti-spam rules as play (1 per user per UTC day). Cap: 15 walk events.
+- Each walker is counted at most once per UTC day (anti-spam). Lifetime cap: 15 walk events.
 - Owner walks count 2×; community walks count 1×.
 - **Vitality score** (0–100%) scales linearly from total weighted walk count.
 - **Lifespan bonus**: up to +10 extra days at max vitality.
+- Vitality label shown as a teal badge in the creature page header.
 
-Mood and vitality badges (purple and teal) are shown in the creature page header stats row. The activity panel shows today's status and prevents duplicate actions.
+### Panel Layout
+
+The Activities panel shows a health bar and a stats row (feeds · play · walk counts) above three side-by-side action cards (green / purple / teal). Each card shows the current daily status and disables its button once the daily limit has been used. A "Come back tomorrow!" message appears after a successful action.
 
 ---
 
 ## Breeding
 
-Users pair two compatible creatures by pasting their Steem post URLs. The child genome is generated deterministically and published as a new Steem post.
+Users pair two compatible creatures to produce an offspring. On the creature page, **Parent A is locked to the current creature** and only Parent B needs to be entered. The breeding section only appears when the current creature is within its **effective fertility window** — the base window (`FRT_START`–`FRT_END`) expanded on both sides by any play mood bonus and feed fertility boost. The child genome is generated deterministically and published as a new Steem post.
 
 ### Compatibility Rules
 
@@ -221,8 +227,8 @@ All of the following must be true:
 
 1. Same GEN (same genus)
 2. Opposite SX (one Male, one Female)
-3. Both creatures are within their fertility window at the time of breeding
-4. Neither creature is the other's close relative (see Kinship Rules)
+3. Both creatures are within their effective fertility window at the time of breeding
+4. Neither creature is the other's close relative (see Kinship Rules below)
 
 ### Gene Inheritance
 
@@ -246,20 +252,67 @@ The check is entirely client-side using BFS ancestry traversal (up to 12 generat
 
 ---
 
+## Provenance & Copy Detection
+
+Because Steem is a public blockchain, genome data is readable by anyone and could in principle be copy-pasted into a new post. SteemBiota surfaces inauthentic creatures via provenance indicators on every creature card and on the creature page.
+
+### Genome Fingerprint
+
+Every creature carries a stable fingerprint: a pipe-delimited string of all ten gene values (`GEN|SX|MOR|APP|ORN|CLR|LIF|FRT_START|FRT_END|MUT`). Two posts that share an identical fingerprint have identical genomes regardless of author, claimed type, or parent links.
+
+### Timestamp Priority
+
+If two posts share an identical genome fingerprint, the post with the **earlier publication timestamp** is the original. Any later post with the same genome is flagged as a duplicate — this catches both copy-pasted founders and copy-pasted offspring (even if the copier included the original parent links).
+
+In list and grid views, `markDuplicates()` compares fingerprints across the loaded post set and marks later matches in memory. On the creature page, `checkDuplicate()` runs as a background fetch (up to 200 recent `steembiota`-tagged posts) after the main render and updates the UI reactively when a match is found.
+
+### Provenance Badges
+
+Every creature card and the creature page header show a provenance badge. Priority order (highest first):
+
+| Badge | Meaning |
+|---|---|
+| ⚠ Duplicate | Identical genome exists in an earlier post — this is a copy |
+| ⚠ No parents | Claims to be a bred offspring but contains no parent links in metadata |
+| ⚠ Unverified Origin | Posted as a founder but genome has ≥ 3 simultaneously maxed traits (statistically implausible from random generation) |
+| ⚡ Speciation | Legitimately bred offspring that created a new genus |
+| 🧬 Bred / Bred — Mutation | Legitimately bred offspring with valid parent links |
+| 🌱 Origin Creature | Legitimate randomly-generated founder |
+
+### Warning Banners
+
+On the creature page the two most serious cases display an expanded warning banner below the header stats row:
+
+- **Duplicate genome**: names the original author, links to their post, and states the original publication date.
+- **Missing parent links**: explains that legitimate offspring always record both parents and that this creature's lineage cannot be verified.
+
+---
+
 ## User Levels & XP
 
-Every on-chain action earns XP for the acting user. XP totals are computed client-side from blockchain history and displayed on each user's profile page.
+Every on-chain action earns XP for the acting user. XP totals are computed client-side from blockchain history and displayed on each user's profile page and the global leaderboard.
 
 | Action | XP |
 |---|---|
 | Publish a founder creature | 100 |
 | Publish an offspring | 500 |
-| Feed a creature (owner) | 20 |
-| Feed a creature (community) | 10 |
-| Play with a creature | 5 |
-| Walk a creature | 5 |
+| Each unique genus contributed (distinct GEN values across own creatures) | 25 |
+| Each speciation event in own offspring | 75 |
+| Feed a creature | 10 |
 
-XP thresholds follow a quadratic curve. Level title and progress are shown prominently on the profile page.
+Breeding an offspring is worth **5× more XP than a founder** because it requires two compatible, fertile, unrelated creatures to exist simultaneously — a significantly higher coordination barrier.
+
+**Rank thresholds (cumulative XP):**
+
+| Rank | Min XP | Icon |
+|---|---|---|
+| Wanderer | 0 | 🌿 |
+| Naturalist | 100 | 🔬 |
+| Cultivator | 300 | 🌱 |
+| Breeder | 700 | 🐣 |
+| Ecologist | 1 500 | 🍃 |
+| Evolutionist | 3 000 | 🧬 |
+| Progenitor | 6 000 | 🌳 |
 
 ---
 
@@ -288,8 +341,8 @@ Filters can be combined and are cleared individually. Pagination resets automati
 | `/#/` | Home — creature grid with filters, founder creator |
 | `/#/about` | About page |
 | `/#/leaderboard` | Global XP leaderboard |
-| `/#/@user` | User profile — creature grid with filters, level/XP badge, Steem profile header |
-| `/#/@author/permlink` | Creature page — canvas render with pose + expression, unicode render, genome table, stats, feed panel, activity panel (play/walk), breed panel |
+| `/#/@user` | Profile — creature grid with filters, level/XP badge, Steem profile header |
+| `/#/@author/permlink` | Creature — canvas + reaction animation, unified activities panel (feed/play/walk), breed panel (fertile window only, Parent A locked), unicode render, genome table, family/kinship panel, provenance badges and banners |
 
 ---
 
@@ -297,23 +350,31 @@ Filters can be combined and are cleared individually. Pagination resets automati
 
 ### Creature post (`json_metadata.steembiota`)
 
+Founder:
+
 ```json
 {
   "version": "1.0",
-  "type": "creature",
+  "type": "founder",
   "genome": { "GEN": 42, "SX": 0, "MOR": 1234, "APP": 5678, "ORN": 9012, "CLR": 180, "LIF": 100, "FRT_START": 30, "FRT_END": 70, "MUT": 1 },
   "name": "Vyrex Nymwhisper",
   "genusName": "Vyrex",
   "age": 0,
-  "lifecycleStage": "Baby",
+  "lifecycleStage": "Baby"
+}
+```
+
+Offspring (additional fields only):
+
+```json
+{
+  "type": "offspring",
   "parentA": { "author": "alice", "permlink": "vyrex-nymwhisper-..." },
   "parentB": { "author": "bob",   "permlink": "vyrex-shadowpaw-..." },
   "mutated": false,
   "speciated": false
 }
 ```
-
-`parentA`, `parentB`, `mutated`, and `speciated` are only present on offspring posts.
 
 ### Feed reply (`json_metadata.steembiota`)
 
@@ -340,7 +401,7 @@ Filters can be combined and are cleared individually. Pagination resets automati
 }
 ```
 
-`type` is `"play"` or `"walk"`.
+`type` is `"play"` or `"walk"`. Walk replies use `"walker"` in place of `"player"`.
 
 ### Post titles
 
@@ -367,6 +428,8 @@ Derived from the post title: lowercased, whitespace becomes hyphens, non-alphanu
 **Client-side only** — All logic runs in the browser. No servers or external databases.
 
 **Diversity enforcement** — The kinship system prevents same-bloodline farming and encourages cross-community breeding partnerships.
+
+**Provenance transparency** — Genome fingerprinting and timestamp-priority checks expose copy-pasted creatures publicly without requiring any trusted authority.
 
 ---
 

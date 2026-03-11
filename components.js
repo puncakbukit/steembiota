@@ -1356,6 +1356,8 @@ const CreatureCardComponent = {
     routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; },
     steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; },
     provenanceBadge() {
+      if (this.post.isDuplicate)
+        return { icon: "⚠", label: "Duplicate", color: "#ff8a80" };
       const type       = this.post.type || "founder";
       const hasParents = !!(this.post.parentA || this.post.parentB);
       if (type === "offspring" && hasParents)
