@@ -122,6 +122,36 @@ async function loadGenomeFromPost(url) {
   return { genome, author, permlink, age: elapsed };
 }
 
+// Stable string key that uniquely identifies a genome's content.
+// All gene values are included so any copy — founder or offspring — produces the same key.
+function genomeFingerprint(g) {
+  return [g.GEN, g.SX, g.MOR, g.APP, g.ORN, g.CLR, g.LIF, g.FRT_START, g.FRT_END, g.MUT].join("|");
+}
+
+// Given an array of parsed creature posts (must have .fingerprint and .created),
+// marks any post whose genome appeared earlier in another post as a duplicate.
+// Returns the same array mutated in-place (also sets .isDuplicate and .originalKey).
+function markDuplicates(posts) {
+  // Map fingerprint → earliest { author, permlink, created }
+  const earliest = new Map();
+  for (const p of posts) {
+    const fp  = p.fingerprint;
+    const key = p.author + "/" + p.permlink;
+    if (!earliest.has(fp) || p.created < earliest.get(fp).created) {
+      earliest.set(fp, { author: p.author, permlink: p.permlink, created: p.created, key });
+    }
+  }
+  for (const p of posts) {
+    const first = earliest.get(p.fingerprint);
+    const selfKey = p.author + "/" + p.permlink;
+    p.isDuplicate    = first.key !== selfKey;
+    p.originalAuthor   = p.isDuplicate ? first.author   : null;
+    p.originalPermlink = p.isDuplicate ? first.permlink : null;
+    p.originalCreated  = p.isDuplicate ? first.created  : null;
+  }
+  return posts;
+}
+
 // Convert a raw Steem post array into creature card data objects.
 // Filters to valid SteemBiota posts, newest first.
 const PAGE_SIZE = 15;
@@ -144,10 +174,16 @@ function parseSteembiotaPosts(rawPosts) {
       parentA:        sb.parentA || null,
       parentB:        sb.parentB || null,
       speciated:      sb.speciated || false,
+      fingerprint:    genomeFingerprint(sb.genome),
+      isDuplicate:    false,
+      originalAuthor:   null,
+      originalPermlink: null,
+      originalCreated:  null,
       created:        p.created || ""
     });
   }
   results.sort((a, b) => (b.created > a.created ? 1 : -1));
+  markDuplicates(results);
   return results;
 }
 
@@ -1360,6 +1396,10 @@ const CreatureView = {
       creatureType:  null,   // "founder" | "offspring"
       speciated:     false,  // true if offspring caused a genus split
       mutated:       false,  // true if offspring had a mutation
+      isDuplicate:      false,   // true if an earlier post with identical genome exists
+      originalAuthor:   null,    // author of the earliest identical genome post
+      originalPermlink: null,    // permlink of the earliest identical genome post
+      originalCreated:  null,    // ISO timestamp of the earliest post
       parentA:       null,
       parentB:       null,
       siblings:      [],
@@ -1395,33 +1435,34 @@ const CreatureView = {
       return "https://steemit.com/@" + this.author + "/" + this.permlink;
     },
     // ── Provenance analysis ──────────────────────────────────────
-    // Returns one of: "offspring" | "founder" | "suspicious-founder" | "broken-offspring"
+    // Priority: duplicate > broken-offspring > offspring > suspicious-founder > founder
     provenanceStatus() {
       if (!this.genome) return null;
+      // Timestamp-priority duplicate — strongest signal, overrides everything
+      if (this.isDuplicate) return "duplicate";
       const isOffspring = this.creatureType === "offspring";
       const hasParents  = !!(this._rawParentA || this._rawParentB);
       if (isOffspring && hasParents)  return "offspring";
-      if (isOffspring && !hasParents) return "broken-offspring";  // claims offspring, no parent links
-      // Founder — check for suspiciously optimal genome
-      // A legitimately random founder is very unlikely to have all four visual genes
-      // (MOR 0–9, APP 0–9, ORN 0–9999, CLR 0–359) simultaneously near their
-      // extreme values, OR to have LIF at the absolute min or max of its range (80 or 160).
+      if (isOffspring && !hasParents) return "broken-offspring";
+      // Founder — genome plausibility check
       const g = this.genome;
       const suspicionCount =
-        (g.MOR >= 8 ? 1 : 0) +          // top 20% morphology
-        (g.APP >= 8 ? 1 : 0) +          // top 20% appearance
-        (g.MUT === 5 ? 1 : 0) +         // maximum mutation rate (very rare naturally)
-        (g.LIF >= 155 || g.LIF <= 82 ? 1 : 0) +  // near-extreme lifespan
-        (g.ORN >= 9800 ? 1 : 0);        // top 2% ornament
+        (g.MOR >= 8 ? 1 : 0) +
+        (g.APP >= 8 ? 1 : 0) +
+        (g.MUT === 5 ? 1 : 0) +
+        (g.LIF >= 155 || g.LIF <= 82 ? 1 : 0) +
+        (g.ORN >= 9800 ? 1 : 0);
       if (suspicionCount >= 3) return "suspicious-founder";
       return "founder";
     },
     provenanceBadge() {
       switch (this.provenanceStatus) {
+        case "duplicate":
+          return { icon: "⚠", label: "Duplicate Genome", color: "#ff8a80", border: "#b71c1c", bg: "#1a0000" };
         case "offspring":
           if (this.speciated) return { icon: "⚡", label: "Speciation Event", color: "#ffb74d", border: "#e65100", bg: "#1a0f00" };
-          if (this.mutated)   return { icon: "🧬", label: "Bred — Mutation", color: "#80deea", border: "#006064", bg: "#001a1c" };
-          return                       { icon: "🧬", label: "Bred Offspring",  color: "#80deea", border: "#00838f", bg: "#001a1c" };
+          if (this.mutated)   return { icon: "🧬", label: "Bred — Mutation",  color: "#80deea", border: "#006064", bg: "#001a1c" };
+          return                       { icon: "🧬", label: "Bred Offspring",   color: "#80deea", border: "#00838f", bg: "#001a1c" };
         case "broken-offspring":
           return { icon: "⚠", label: "Offspring — Missing Parent Links", color: "#ff8a80", border: "#b71c1c", bg: "#1a0000" };
         case "suspicious-founder":
@@ -1472,6 +1513,7 @@ const CreatureView = {
         this.creatureType  = sb.type || "founder";
         this.speciated     = sb.speciated || false;
         this.mutated       = sb.mutated   || false;
+        this._postCreated  = post.created || null;   // raw timestamp for duplicate check
         this.postAge   = calculateAge(post.created);   // live age from publish timestamp
 
         // Load feed events + activity events from replies
@@ -1502,8 +1544,54 @@ const CreatureView = {
       }
       this.loading = false;
 
-      // Load kinship in background after main render
-      if (!this.loadError) this.loadKinship();
+      // Load kinship + duplicate check in background after main render
+      if (!this.loadError) {
+        this.loadKinship();
+        this.checkDuplicate();
+      }
+    },
+
+    // ── Duplicate / timestamp-priority check ────────────────────
+    // Fetches all steembiota posts (up to 200, same approach as leaderboard)
+    // and looks for any post with an identical genome fingerprint published
+    // before this creature. If found, marks this creature as a duplicate.
+    async checkDuplicate() {
+      if (!this.genome) return;
+      const selfFp      = genomeFingerprint(this.genome);
+      const selfCreated = this._postCreated;   // raw ISO string stored during load
+      if (!selfCreated) return;
+
+      try {
+        let allRaw = await fetchPostsByTag("steembiota", 100);
+        if (Array.isArray(allRaw) && allRaw.length === 100) {
+          const last = allRaw[allRaw.length - 1];
+          const page2 = await fetchPostsByTagPaged("steembiota", 100, last.author, last.permlink);
+          if (Array.isArray(page2)) allRaw = allRaw.concat(page2.slice(1));
+        }
+        for (const p of (allRaw || [])) {
+          // Skip self
+          if (p.author === this.author && p.permlink === this.permlink) continue;
+          let meta = {};
+          try { meta = JSON.parse(p.json_metadata || "{}"); } catch {}
+          if (!meta.steembiota?.genome) continue;
+          const fp = genomeFingerprint(meta.steembiota.genome);
+          if (fp !== selfFp) continue;
+          // Same genome — compare timestamps
+          const otherCreated = p.created.endsWith("Z") ? p.created : p.created + "Z";
+          const selfCreatedN  = selfCreated.endsWith("Z") ? selfCreated : selfCreated + "Z";
+          if (otherCreated < selfCreatedN) {
+            // Found an earlier post with identical genome
+            this.isDuplicate      = true;
+            this.originalAuthor   = p.author;
+            this.originalPermlink = p.permlink;
+            this.originalCreated  = otherCreated;
+            return;
+          }
+        }
+      } catch (e) {
+        // Non-fatal — duplicate check is best-effort
+        console.warn("Duplicate check failed:", e.message);
+      }
     },
 
     async loadKinship() {
@@ -1690,6 +1778,18 @@ const CreatureView = {
           </div>
 
           <!-- Provenance warning banner — shown for suspicious or broken creatures -->
+          <div v-if="provenanceStatus === 'duplicate'" style="
+            margin-top:10px; padding:10px 14px; border-radius:8px;
+            background:#1a0000; border:1px solid #b71c1c;
+            font-size:12px; color:#ff8a80; text-align:left; max-width:520px; margin-left:auto; margin-right:auto;">
+            <strong>⚠ Duplicate Genome Detected</strong><br/>
+            An identical genome was published earlier by
+            <router-link :to="'/@' + originalAuthor + '/' + originalPermlink"
+              style="color:#ff8a80;font-weight:bold;">@{{ originalAuthor }}</router-link>
+            on {{ originalCreated ? new Date(originalCreated).toLocaleDateString() : '?' }}.
+            By timestamp priority, that post is the original. This creature's genome is a copy
+            and has no independent lineage value.
+          </div>
           <div v-if="provenanceStatus === 'suspicious-founder'" style="
             margin-top:10px; padding:10px 14px; border-radius:8px;
             background:#1a0e00; border:1px solid #e65100;
