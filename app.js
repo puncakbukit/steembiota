@@ -101,7 +101,13 @@ function parseSteemUrl(url) {
 async function loadGenomeFromPost(url) {
   const { author, permlink } = parseSteemUrl(url);
   const post = await fetchPost(author, permlink);
-  if (!post || !post.author) throw new Error("Post not found: " + url);
+  if (!post) throw new Error("Post not found: " + url);
+  // Tombstoned post -- delete_comment sets author to "" on the API
+  if (isPhantomPost(post)) throw new Error(
+    "This creature is a Phantom (👻). Its post was removed from the visible chain. " +
+    "Phantoms cannot be loaded for breeding."
+  );
+  if (!post.author) throw new Error("Post not found: " + url);
 
   // Try json_metadata.steembiota.genome first
   try {
@@ -176,6 +182,7 @@ function parseSteembiotaPosts(rawPosts) {
       speciated:      sb.speciated || false,
       fingerprint:    genomeFingerprint(sb.genome),
       isDuplicate:    false,
+      isPhantom:      false,
       originalAuthor:   null,
       originalPermlink: null,
       originalCreated:  null,
@@ -1383,6 +1390,7 @@ const CreatureView = {
     return {
       loading:       true,
       loadError:     null,
+      isPhantom:     false,   // true when post was tombstoned via delete_comment
       genome:        null,
       name:          null,
       author:        null,
@@ -1438,6 +1446,7 @@ const CreatureView = {
     // Priority: duplicate > broken-offspring > offspring > suspicious-founder > founder
     provenanceStatus() {
       if (!this.genome) return null;
+      if (this.isPhantom) return "phantom";
       // Timestamp-priority duplicate — strongest signal, overrides everything
       if (this.isDuplicate) return "duplicate";
       const isOffspring = this.creatureType === "offspring";
@@ -1457,6 +1466,8 @@ const CreatureView = {
     },
     provenanceBadge() {
       switch (this.provenanceStatus) {
+        case "phantom":
+          return { icon: "👻", label: "Phantom", color: "#9e9e9e", border: "#424242", bg: "#0a0a0a" };
         case "duplicate":
           return { icon: "⚠", label: "Duplicate Genome", color: "#ff8a80", border: "#b71c1c", bg: "#1a0000" };
         case "offspring":
@@ -1474,7 +1485,7 @@ const CreatureView = {
     },
     isFertile() {
       if (!this.genome || !this.postAge) return false;
-      if (this.fossil) return false;
+      if (this.fossil || this.isPhantom) return false;
       const ext   = this.activityState?.fertilityExtension || 0;
       const boost = this.feedState?.fertilityBoost || 0;
       const windowDays  = this.genome.FRT_END - this.genome.FRT_START;
@@ -1501,7 +1512,14 @@ const CreatureView = {
       this.permlink = permlink;
       try {
         const post = await fetchPost(author, permlink);
-        if (!post || !post.author) throw new Error("Post not found.");
+        if (!post) throw new Error("Post not found.");
+        // Tombstoned — author field is empty string after delete_comment
+        if (isPhantomPost(post)) {
+          this.isPhantom = true;
+          this.loading   = false;
+          return;
+        }
+        if (!post.author) throw new Error("Post not found.");
 
         let meta = {};
         try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
@@ -1604,6 +1622,19 @@ const CreatureView = {
           try {
             const node = await fetchSteembiotaPost(ref.author, ref.permlink);
             if (!node) return null;
+            // Parent is a phantom (post was deleted)
+            if (node.phantom) {
+              return {
+                author:        ref.author,
+                permlink:      ref.permlink,
+                name:          ref.author,
+                genome:        null,
+                age:           null,
+                lifecycleStage: null,
+                isPhantom:     true,
+                created:       ""
+              };
+            }
             return {
               author:        node.author,
               permlink:      node.permlink,
@@ -1611,6 +1642,7 @@ const CreatureView = {
               genome:        node.meta.genome,
               age:           node.meta.age ?? 0,
               lifecycleStage: getLifecycleStage(node.meta.age ?? 0, node.meta.genome),
+              isPhantom:     false,
               created:       ""
             };
           } catch { return null; }
@@ -1710,6 +1742,38 @@ const CreatureView = {
     <div style="margin-top:20px;padding:0 16px;">
 
       <loading-spinner-component v-if="loading"></loading-spinner-component>
+
+      <!-- ===== PHANTOM STATE ===== -->
+      <div v-else-if="isPhantom" style="margin-top:32px;padding:0 16px;">
+        <div style="font-size:2.4rem;margin-bottom:12px;">👻</div>
+        <div style="font-size:1.2rem;font-weight:bold;color:#9e9e9e;letter-spacing:0.04em;">
+          Phantom Creature
+        </div>
+        <div style="
+          margin:16px auto; padding:16px 20px; border-radius:10px; max-width:520px;
+          background:#111; border:1px solid #333; color:#888; font-size:0.88rem; line-height:1.6;
+        ">
+          <p style="margin:0 0 10px;color:#aaa;">
+            This creature's post was removed from the visible chain via Steemit's
+            delete function. It is now a <strong style="color:#bdbdbd;">Phantom</strong> —
+            no longer alive, but not at rest either.
+          </p>
+          <p style="margin:0 0 10px;">
+            Unlike a <strong>Fossil</strong>, which is an honourable end of a full lifecycle,
+            a Phantom was erased before its time. Its genome echoes remain permanently
+            on the immutable blockchain ledger, but the creature walks no more.
+          </p>
+          <p style="margin:0;color:#616161;font-size:0.82rem;font-style:italic;">
+            Phantoms cannot breed, be fed, or interact. Their lineage is severed.
+          </p>
+        </div>
+        <div style="margin-top:6px;font-size:0.78rem;color:#444;">
+          @{{ author }}/{{ permlink }}
+        </div>
+        <div style="margin-top:16px;">
+          <router-link to="/" style="color:#66bb6a;font-size:0.9rem;">← Back to Home</router-link>
+        </div>
+      </div>
 
       <div v-else-if="loadError" style="color:#ff8a80;margin-top:24px;">
         ⚠ {{ loadError }}
@@ -1889,8 +1953,24 @@ const CreatureView = {
             <template v-if="parentA || parentB">
               <div style="font-size:0.78rem;color:#66bb6a;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Parents</div>
               <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px;max-width:500px;">
-                <creature-card-component v-if="parentA" :post="parentA"></creature-card-component>
-                <creature-card-component v-if="parentB" :post="parentB"></creature-card-component>
+                <template v-if="parentA">
+                  <creature-card-component v-if="!parentA.isPhantom" :post="parentA"></creature-card-component>
+                  <div v-else style="border:1px solid #333;border-radius:10px;padding:16px;text-align:center;background:#0a0a0a;color:#555;">
+                    <div style="font-size:1.8rem;">👻</div>
+                    <div style="font-size:0.78rem;margin-top:6px;">Phantom Parent</div>
+                    <div style="font-size:0.68rem;color:#3a3a3a;margin-top:4px;">@{{ parentA.author }}</div>
+                    <div style="font-size:0.65rem;color:#2a2a2a;margin-top:4px;font-style:italic;">Post removed from visible chain</div>
+                  </div>
+                </template>
+                <template v-if="parentB">
+                  <creature-card-component v-if="!parentB.isPhantom" :post="parentB"></creature-card-component>
+                  <div v-else style="border:1px solid #333;border-radius:10px;padding:16px;text-align:center;background:#0a0a0a;color:#555;">
+                    <div style="font-size:1.8rem;">👻</div>
+                    <div style="font-size:0.78rem;margin-top:6px;">Phantom Parent</div>
+                    <div style="font-size:0.68rem;color:#3a3a3a;margin-top:4px;">@{{ parentB.author }}</div>
+                    <div style="font-size:0.65rem;color:#2a2a2a;margin-top:4px;font-style:italic;">Post removed from visible chain</div>
+                  </div>
+                </template>
               </div>
             </template>
             <div v-else style="font-size:12px;color:#333;margin-bottom:8px;">No parent data (origin creature)</div>
