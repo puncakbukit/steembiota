@@ -1388,6 +1388,25 @@ const CreatureView = {
     breedPrefilledUrl() {
       if (!this.author || !this.permlink) return null;
       return "https://steemit.com/@" + this.author + "/" + this.permlink;
+    },
+    isFertile() {
+      if (!this.genome || !this.postAge) return false;
+      if (this.fossil) return false;
+      const ext   = this.activityState?.fertilityExtension || 0;
+      const boost = this.feedState?.fertilityBoost || 0;
+      const windowDays  = this.genome.FRT_END - this.genome.FRT_START;
+      const boostDays   = Math.floor(windowDays * boost / 2);
+      const effStart    = this.genome.FRT_START - ext - boostDays;
+      const effEnd      = this.genome.FRT_END   + ext + boostDays;
+      return this.postAge >= effStart && this.postAge < effEnd;
+    },
+    lockedA() {
+      if (!this.genome || !this.breedPrefilledUrl) return null;
+      return {
+        url:  this.breedPrefilledUrl,
+        name: this.name || this.author,
+        sex:  this.genome.SX === 0 ? "♂ Male" : "♀ Female"
+      };
     }
   },
   methods: {
@@ -1725,14 +1744,15 @@ const CreatureView = {
           </template>
         </div>
 
-        <hr/>
-
-        <!-- Breed panel — Parent A pre-filled -->
-        <breeding-panel-component
-          :username="username"
-          :initial-url-a="breedPrefilledUrl"
-          @notify="(msg,type) => notify(msg,type)"
-        ></breeding-panel-component>
+        <!-- Breed panel — only shown while creature is fertile; Parent A locked to this creature -->
+        <template v-if="isFertile">
+          <hr/>
+          <breeding-panel-component
+            :username="username"
+            :locked-a="lockedA"
+            @notify="(msg,type) => notify(msg,type)"
+          ></breeding-panel-component>
+        </template>
 
       </template>
 

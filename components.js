@@ -1955,16 +1955,20 @@ const BreedingPanelComponent = {
   name: "BreedingPanelComponent",
   props: {
     username:    String,
-    initialUrlA: { type: String, default: "" }   // pre-fill Parent A from CreatureView
+    initialUrlA: { type: String, default: "" },
+    // When set from CreatureView, locks Parent A to the page's creature.
+    // Shape: { url, name, sex }  (sex is "♂ Male" or "♀ Female")
+    lockedA:     { type: Object,  default: null }
   },
   emits: ["notify"],
   data() {
+    const seedUrl = (this.lockedA?.url) || this.initialUrlA || "";
     return {
-      urlA:        this.initialUrlA || "",
+      urlA:        seedUrl,
       urlB:        "",
       loading:     false,
       loadError:   "",
-      loadStatus:  "",   // progress message during multi-step async check
+      loadStatus:  "",
       genomeA:     null,
       genomeB:     null,
       childGenome: null,
@@ -1972,9 +1976,13 @@ const BreedingPanelComponent = {
       childArt:    null,
       breedInfo:   null,
       publishing:  false,
-      customTitle: "",       // pre-filled with default; user may edit before publishing
-      _facingRight: false    // synced from child canvas component
+      customTitle: "",
+      _facingRight: false
     };
+  },
+  watch: {
+    // Keep urlA in sync if the locked creature changes (e.g. navigation)
+    lockedA(val) { if (val?.url) this.urlA = val.url; }
   },
   computed: {
     sexLabel() {
@@ -2145,23 +2153,37 @@ const BreedingPanelComponent = {
 
       <template v-else>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;margin:0 auto;">
-        <!-- Parent A -->
+        <!-- Parent A — locked to page creature, or free input -->
         <div style="position:relative;">
-          <input
-            v-model="urlA"
-            type="text"
-            placeholder="Parent A — Steem post URL"
-            style="font-size:13px;width:100%;padding-right:70px;"
-          />
-          <span
-            v-if="genomeA"
-            :style="{
-              position:'absolute', right:'10px', top:'50%', transform:'translateY(-50%)',
-              fontSize:'12px', fontWeight:'bold',
-              color: genomeA.SX === 0 ? '#90caf9' : '#f48fb1',
-              pointerEvents:'none'
-            }"
-          >{{ parentASex }}</span>
+          <!-- Locked display -->
+          <div v-if="lockedA" :style="{
+            fontSize:'13px', padding:'8px 10px', borderRadius:'6px',
+            background:'#0d1a0d', border:'1px solid #2e7d32',
+            color:'#a5d6a7', display:'flex', justifyContent:'space-between', alignItems:'center'
+          }">
+            <span>🔒 Parent A: <strong>{{ lockedA.name }}</strong></span>
+            <span :style="{ fontSize:'12px', fontWeight:'bold', color: lockedA.sex.startsWith('♂') ? '#90caf9' : '#f48fb1' }">
+              {{ lockedA.sex }}
+            </span>
+          </div>
+          <!-- Free input -->
+          <template v-else>
+            <input
+              v-model="urlA"
+              type="text"
+              placeholder="Parent A — Steem post URL"
+              style="font-size:13px;width:100%;padding-right:70px;"
+            />
+            <span
+              v-if="genomeA"
+              :style="{
+                position:'absolute', right:'10px', top:'50%', transform:'translateY(-50%)',
+                fontSize:'12px', fontWeight:'bold',
+                color: genomeA.SX === 0 ? '#90caf9' : '#f48fb1',
+                pointerEvents:'none'
+              }"
+            >{{ parentASex }}</span>
+          </template>
         </div>
         <!-- Parent B -->
         <div style="position:relative;">
