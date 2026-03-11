@@ -1356,6 +1356,8 @@ const CreatureCardComponent = {
     routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; },
     steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; },
     provenanceBadge() {
+      if (this.post.isPhantom)
+        return { icon: "👻", label: "Phantom", color: "#9e9e9e" };
       if (this.post.isDuplicate)
         return { icon: "⚠", label: "Duplicate", color: "#ff8a80" };
       const type       = this.post.type || "founder";
@@ -2067,6 +2069,7 @@ const BreedingPanelComponent = {
 
         // ---- Fertility check ----
         const checkFertility = (res, label) => {
+          // loadGenomeFromPost already throws for phantoms, but guard here too
           const g   = res.genome;
           const age = res.age;
           if (age >= g.LIF) throw new Error(

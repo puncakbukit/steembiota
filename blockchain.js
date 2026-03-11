@@ -677,19 +677,40 @@ function steembiotaMeta(post) {
 // Canonical key for a creature post.
 function nodeKey(author, permlink) { return `${author}/${permlink}`; }
 
+// Detect a tombstoned (deleted) Steem post.
+// steem.api.getContent returns a post object with author === "" when the
+// post has been removed via delete_comment. The original broadcast is
+// still recorded in the immutable block history, but the API no longer
+// serves its content.
+function isPhantomPost(post) {
+  return post && post.author === "" && post.permlink !== "";
+}
+
 // Fetch a post and return its steembiota meta + key, or null.
+// Returns { key, author, permlink, meta, phantom: false } for live posts.
+// Returns { key, author, permlink, meta: null, phantom: true } for tombstoned posts.
+// Returns null if the post cannot be found at all or is not a SteemBiota post.
 async function fetchSteembiotaPost(author, permlink) {
   try {
     const post = await fetchPost(author, permlink);
-    if (!post || !post.author) return null;
+    if (!post) return null;
+
+    // Tombstoned — author field is empty string after delete_comment
+    if (isPhantomPost(post)) {
+      return { key: nodeKey(author, permlink), author, permlink, meta: null, phantom: true };
+    }
+
+    if (!post.author) return null;
     const meta = steembiotaMeta(post);
     if (!meta) return null;
-    return { key: nodeKey(author, permlink), author, permlink, meta };
+    return { key: nodeKey(author, permlink), author, permlink, meta, phantom: false };
   } catch { return null; }
 }
 
 // Walk ancestors of a creature upward via BFS.
 // Returns a Map<key, {author,permlink,meta,depth}> of all ancestors found.
+// If any ancestor is tombstoned (phantom), throws an Error so callers can
+// refuse breeding — an incomplete ancestry tree could mask inbreeding.
 async function fetchAncestors(startAuthor, startPermlink) {
   const visited = new Map();                           // key → node
   const queue   = [{ author: startAuthor, permlink: startPermlink, depth: 0 }];
@@ -701,6 +722,16 @@ async function fetchAncestors(startAuthor, startPermlink) {
 
     const node = await fetchSteembiotaPost(author, permlink);
     if (!node) continue;
+
+    // Phantom ancestor — ancestry incomplete, breeding must be refused.
+    if (node.phantom) {
+      throw new Error(
+        `Ancestor @${author}/${permlink} is a Phantom — its post was removed from the ` +
+        `visible chain. Ancestry cannot be fully verified; breeding is blocked to ` +
+        `protect genetic integrity.`
+      );
+    }
+
     visited.set(key, { ...node, depth });
 
     if (depth >= MAX_ANCESTOR_DEPTH) continue;
