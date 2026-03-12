@@ -2,7 +2,7 @@
 
 **SteemBiota** is a decentralised life simulation built on the **Steem blockchain**.
 
-Creatures are generated from deterministic **genomes**, rendered procedurally as canvas paintings, and their entire existence — from birth through feeding, play, walking, breeding, and fossilisation — is **permanently recorded on-chain**.
+Creatures are generated from deterministic **genomes**, rendered procedurally as canvas paintings, and their entire existence — from birth through feeding, play, walking, breeding, ownership transfer, and fossilisation — is **permanently recorded on-chain**.
 
 🌐 **Live app:** https://puncakbukit.github.io/steembiota
 
@@ -13,6 +13,8 @@ Creatures are generated from deterministic **genomes**, rendered procedurally as
 SteemBiota explores digital organisms whose evolution is permanently stored on a blockchain.
 
 Each creature has a compact genome that determines its body shape, colour, lifespan, and fertility window. Once published via Steem Keychain, the genome is immutable. A creature's lifecycle plays out in real time measured in days, and every interaction — feeding, playing, walking, breeding — is stored as a blockchain reply. The blockchain becomes the ecosystem's permanent fossil record.
+
+Creatures can be **transferred between owners** via a two-sided on-chain handshake. Ownership is a derived concept — the original `post.author` never changes, but SteemBiota walks the reply history to determine the current effective owner at read time.
 
 ---
 
@@ -74,6 +76,10 @@ Creature age is measured in **real days** since the post was published. Lifecycl
 | Fossil | 100%+ | 🦴 |
 
 Once the lifespan is exceeded the creature becomes a **Fossil**. Its genome and history remain permanently on-chain but it can no longer be fed, played with, walked, or used in breeding.
+
+### Phantom Creatures
+
+If a post is deleted on Steem (`delete_comment` op), the API returns the post with an empty `author` field. SteemBiota detects this as a **phantom** — distinct from a fossil (natural end-of-life). The creature page shows a 👻 tombstone screen with a lore explanation. Phantoms cannot be fed, played with, walked, or bred. If any ancestor in a breeding chain is phantom, the breeding attempt is blocked entirely to prevent inbreeding check evasion.
 
 ---
 
@@ -229,6 +235,7 @@ All of the following must be true:
 2. Opposite SX (one Male, one Female)
 3. Both creatures are within their effective fertility window at the time of breeding
 4. Neither creature is the other's close relative (see Kinship Rules below)
+5. The user has a valid breed permit for both creatures (see Breed Permits below)
 
 ### Gene Inheritance
 
@@ -252,6 +259,106 @@ The check is entirely client-side using BFS ancestry traversal (up to 12 generat
 
 ---
 
+## Breed Permits
+
+Creatures are **closed to external breeding by default**. Only the effective owner can authorise specific users to use their creature as a breeding parent.
+
+### How it works
+
+The owner publishes a `breed_permit` reply on the creature's post naming the grantee and an optional expiry period. A `breed_revoke` reply cancels an existing permit. The latest action per grantee wins; expired permits are treated as revoked. Permits are visible to all users in the **Permit Manager** panel on the creature page (owner-only).
+
+- The effective owner always has implicit breed permission on their own creatures.
+- Permits granted before a completed ownership transfer are **automatically voided** — the new owner starts with a clean permit slate.
+
+### Permit reply structure (`json_metadata.steembiota`)
+
+```json
+{
+  "version": "1.0",
+  "type": "breed_permit",
+  "creature": { "author": "alice", "permlink": "vyrex-nymwhisper-..." },
+  "grantee": "carol",
+  "expires_days": 7
+}
+```
+
+Set `expires_days` to `0` for a permanent (non-expiring) permit. A `breed_revoke` reply uses the same shape with `"type": "breed_revoke"` and no `expires_days` field.
+
+---
+
+## Ownership Transfer
+
+Creature ownership can be transferred between users via a **two-sided on-chain handshake**. This prevents "pet dumping" — a creature cannot be forced on an unwilling recipient.
+
+### Protocol
+
+**Step 1 — Offer:** The current effective owner publishes a `transfer_offer` reply on the creature's post naming the recipient. Only one pending offer may exist at a time; a new offer replaces the previous one.
+
+**Step 2 — Accept:** The named recipient publishes a `transfer_accept` reply on the same creature post, referencing the exact `offer_permlink`. This is the moment effective ownership changes.
+
+**Cancellation:** The current effective owner can publish a `transfer_cancel` reply at any time before acceptance to withdraw the offer.
+
+### Effective owner
+
+The original `post.author` never changes on-chain. SteemBiota derives the **effective owner** by walking the reply history via `parseOwnershipChain()`. The effective owner governs:
+
+- Who can publish breed permits and revocations
+- Who sees the Permit Manager panel and the Transfer panel
+- Whose profile the creature appears on
+- Whether the breed panel appears (effective owner is always permitted to breed)
+
+When a creature has been transferred, the creature page shows a 🤝 "Owned by @newowner" badge beneath the name header.
+
+### Ownership rules
+
+- Only the effective owner at the time of an offer may publish it.
+- Only the named recipient may accept.
+- Permits issued before a completed transfer are voided automatically (`permitsValidFrom` timestamp).
+- Transfer history is stored on-chain and displayed in the Transfer panel's history log.
+
+### Transfer reply structures (`json_metadata.steembiota`)
+
+```json
+{ "version": "1.0", "type": "transfer_offer",  "creature": { "author": "alice", "permlink": "..." }, "to": "bob",   "ts": "2026-03-01T12:00:00Z" }
+{ "version": "1.0", "type": "transfer_accept", "creature": { "author": "alice", "permlink": "..." }, "offer_permlink": "steembiota-transfer-offer-bob-...", "ts": "..." }
+{ "version": "1.0", "type": "transfer_cancel", "creature": { "author": "alice", "permlink": "..." }, "ts": "2026-03-02T08:00:00Z" }
+```
+
+---
+
+## Notifications
+
+The **🔔 Notifications** page (`/#/notifications`) aggregates all on-chain events relevant to the logged-in user. It is accessible only when logged in.
+
+### Event types
+
+| Event | Description |
+|---|---|
+| 🍖 Feed | Someone fed one of your creatures |
+| 🎾 Play | Someone played with one of your creatures |
+| 🐾 Walk | Someone walked one of your creatures |
+| 🐣 Birth | Someone bred an offspring from one of your creatures |
+| 🧬 Breed | Someone used your creature's lineage to breed a new creature |
+| 🤝 Transfer offer | Someone is offering you ownership of a creature |
+
+### Pending transfer offers
+
+Incoming transfer offers are highlighted in a dedicated banner at the top of the Notifications page with a one-click **✅ Accept** button — no need to navigate to the individual creature page. Accepting publishes a `transfer_accept` reply via Steem Keychain and immediately updates the UI.
+
+### Notification badge
+
+A red badge on the 🔔 nav icon shows the number of pending transfer offers. The count is refreshed on login and polled every 5 minutes while the user is logged in.
+
+### How events are discovered
+
+Because Steem has no server-side notification API, events are discovered entirely client-side:
+
+1. The user's own creature posts are fetched and their reply trees are scanned for `feed`, `play`, `walk`, `birth`, and `transfer_offer` events.
+2. All recent steembiota-tagged posts authored by others are scanned for pending `transfer_offer` replies naming the user as recipient.
+3. Recent steembiota offspring posts are checked for cases where the user's creature appears as a parent (`breed` notifications).
+
+---
+
 ## Provenance & Copy Detection
 
 Because Steem is a public blockchain, genome data is readable by anyone and could in principle be copy-pasted into a new post. SteemBiota surfaces inauthentic creatures via provenance indicators on every creature card and on the creature page.
@@ -272,6 +379,7 @@ Every creature card and the creature page header show a provenance badge. Priori
 
 | Badge | Meaning |
 |---|---|
+| 👻 Phantom | Post was tombstoned on-chain (`post.author` is empty) — creature no longer exists |
 | ⚠ Duplicate | Identical genome exists in an earlier post — this is a copy |
 | ⚠ No parents | Claims to be a bred offspring but contains no parent links in metadata |
 | ⚠ Unverified Origin | Posted as a founder but genome has ≥ 3 simultaneously maxed traits (statistically implausible from random generation) |
@@ -341,8 +449,9 @@ Filters can be combined and are cleared individually. Pagination resets automati
 | `/#/` | Home — creature grid with filters, founder creator |
 | `/#/about` | About page |
 | `/#/leaderboard` | Global XP leaderboard |
-| `/#/@user` | Profile — creature grid with filters, level/XP badge, Steem profile header |
-| `/#/@author/permlink` | Creature — canvas + reaction animation, unified activities panel (feed/play/walk), breed panel (fertile window only, Parent A locked), unicode render, genome table, family/kinship panel, provenance badges and banners |
+| `/#/notifications` | Notifications — activity feed and pending transfer offer accepts (login required) |
+| `/#/@user` | Profile — all creatures **currently owned** by the user, including received transfers; grid with filters, level/XP badge, Steem profile header |
+| `/#/@author/permlink` | Creature — canvas + reaction animation, unified activities panel (feed/play/walk), breed permit manager (owner only), breed panel (fertile window + permitted users only), ownership transfer panel (owner and pending recipient), unicode render, genome table, family/kinship panel, provenance badges and banners |
 
 ---
 
@@ -376,7 +485,7 @@ Offspring (additional fields only):
 }
 ```
 
-### Feed reply (`json_metadata.steembiota`)
+### Feed reply
 
 ```json
 {
@@ -389,7 +498,7 @@ Offspring (additional fields only):
 }
 ```
 
-### Activity reply (`json_metadata.steembiota`)
+### Activity reply
 
 ```json
 {
@@ -402,6 +511,28 @@ Offspring (additional fields only):
 ```
 
 `type` is `"play"` or `"walk"`. Walk replies use `"walker"` in place of `"player"`.
+
+### Breed permit reply
+
+```json
+{
+  "version": "1.0",
+  "type": "breed_permit",
+  "creature": { "author": "alice", "permlink": "vyrex-nymwhisper-..." },
+  "grantee": "carol",
+  "expires_days": 7
+}
+```
+
+Use `"type": "breed_revoke"` to cancel a permit. Set `expires_days` to `0` for a permanent grant.
+
+### Ownership transfer replies
+
+```json
+{ "version": "1.0", "type": "transfer_offer",  "creature": { "author": "alice", "permlink": "..." }, "to": "bob",   "ts": "2026-03-01T12:00:00Z" }
+{ "version": "1.0", "type": "transfer_accept", "creature": { "author": "alice", "permlink": "..." }, "offer_permlink": "steembiota-transfer-offer-bob-...", "ts": "..." }
+{ "version": "1.0", "type": "transfer_cancel", "creature": { "author": "alice", "permlink": "..." }, "ts": "2026-03-02T08:00:00Z" }
+```
 
 ### Post titles
 
@@ -430,6 +561,10 @@ Derived from the post title: lowercased, whitespace becomes hyphens, non-alphanu
 **Diversity enforcement** — The kinship system prevents same-bloodline farming and encourages cross-community breeding partnerships.
 
 **Provenance transparency** — Genome fingerprinting and timestamp-priority checks expose copy-pasted creatures publicly without requiring any trusted authority.
+
+**Anti-dumping ownership** — Transfers require the recipient's explicit on-chain acceptance. Creatures cannot be forced on unwilling users.
+
+**Opt-in breeding** — Creatures are closed to external breeding by default. Owners must explicitly grant named permits, preventing unsolicited use of their creatures as parents.
 
 ---
 
