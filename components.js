@@ -1368,9 +1368,9 @@ const CreatureCardComponent = {
         return { icon: "⚠", label: "No parents", color: "#ff8a80" };
       // founder — check suspicious genome
       const g = this.post.genome;
-      const suspicion = (g.MOR >= 8 ? 1 : 0) + (g.APP >= 8 ? 1 : 0) +
-                        (g.MUT === 5 ? 1 : 0) + (g.LIF >= 155 || g.LIF <= 82 ? 1 : 0) +
-                        (g.ORN >= 9800 ? 1 : 0);
+      const suspicion = (g.MOR >= 9900 ? 1 : 0) + (g.APP >= 9900 ? 1 : 0) +
+                        (g.MUT === 5 ? 1 : 0) + (g.LIF > 159 || g.LIF < 80 ? 1 : 0) +
+                        (g.ORN >= 9900 ? 1 : 0);
       if (suspicion >= 3)
         return { icon: "⚠", label: "Unverified", color: "#ffb74d" };
       return { icon: "🌱", label: "Origin", color: "#a5d6a7" };
