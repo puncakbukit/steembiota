@@ -596,9 +596,9 @@ function mirrorUnicodeLine(line) {
 }
 
 // ---- Main builder ----
-// facingRight : boolean — when true the creature faces right (mirrored).
-//               Defaults to false (faces left, same as the original).
-function buildUnicodeArt(genome, age, feedState, facingRight = false) {
+// pose       : "standing"|"alert"|"playful"|"sitting"|"sleeping" — defaults to "standing"
+// facingRight: boolean — when true the creature faces right (mirrored).
+function buildUnicodeArt(genome, age, feedState, facingRight = false, pose = "standing") {
   const effectiveLIF = genome.LIF + (feedState ? feedState.lifespanBonus : 0);
   const pct    = Math.min(age / Math.max(effectiveLIF, 1), 1.0);
   const fossil = pct >= 1.0;
@@ -610,46 +610,70 @@ function buildUnicodeArt(genome, age, feedState, facingRight = false) {
   const ornFrac = (genome.ORN % 1000) / 999;
 
   // ---- Glyph selection ----
-  const fillPool  = UNI_BODY_FILLS[genome.MOR % UNI_BODY_FILLS.length];
-  const fillD     = fillPool[0];  // dense — main body interior
-  const fillM     = fillPool[1];  // mid   — body edge / shading
-  const fillL     = fillPool[2];  // light — belly / top outline row
-  const tailChar  = UNI_TAIL_CHARS[genome.MOR % UNI_TAIL_CHARS.length];
-  const ornChar   = UNI_ORN_CHARS [genome.ORN % UNI_ORN_CHARS.length];
-  const eyeChar   = UNI_EYE_CHARS [genome.GEN % UNI_EYE_CHARS.length];
-  const pawChar   = UNI_PAW_CHARS [genome.APP % UNI_PAW_CHARS.length];
-  const earStyle  = UNI_EAR_STYLES[genome.APP % UNI_EAR_STYLES.length];
-  const sigil     = UNI_SIGIL_CHARS[genome.GEN % UNI_SIGIL_CHARS.length];
-  const sex       = genome.SX === 0 ? "♂" : "♀";
-  const fertile   = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
-  const hasMane   = (genome.ORN % 3) > 0;
-  const hasWing   = (genome.APP % 5) === 0;   // ~20% of creatures have a dorsal wing
+  const fillPool = UNI_BODY_FILLS[genome.MOR % UNI_BODY_FILLS.length];
+  const fillD    = fillPool[0];   // dense — main body interior
+  const fillM    = fillPool[1];   // mid   — body edge / shading
+  const fillL    = fillPool[2];   // light — belly / top outline row
+  const tailChar = UNI_TAIL_CHARS[genome.MOR % UNI_TAIL_CHARS.length];
+  const ornChar  = UNI_ORN_CHARS [genome.ORN % UNI_ORN_CHARS.length];
+  const pawChar  = UNI_PAW_CHARS [genome.APP % UNI_PAW_CHARS.length];
+  const earStyle = UNI_EAR_STYLES[genome.APP % UNI_EAR_STYLES.length];
+  const sigil    = UNI_SIGIL_CHARS[genome.GEN % UNI_SIGIL_CHARS.length];
+  const sex      = genome.SX === 0 ? "♂" : "♀";
+  const fertile  = age >= genome.FRT_START && age < genome.FRT_END && !fossil;
+  const hasMane  = (genome.ORN % 3) > 0;
+  const hasWing  = (genome.APP % 5) === 0;   // ~20% of creatures have a dorsal wing
+  const showEars = pct >= 0.08;
 
-  // Proportions — all in character columns
+  // ---- Expression / eye glyph ----
+  // Driven by pose first, then health state
+  let eyeChar;
+  if (pose === "sleeping") {
+    eyeChar = "—";                          // closed eye arc
+  } else if (pose === "alert") {
+    eyeChar = "◎";                          // wide open
+  } else if (pose === "playful") {
+    eyeChar = "^";                          // excited arc
+  } else if (feedState && feedState.healthPct >= 0.80) {
+    eyeChar = "◉";                          // thriving — bright full eye
+  } else if (feedState && feedState.healthPct >= 0.55) {
+    eyeChar = UNI_EYE_CHARS[genome.GEN % UNI_EYE_CHARS.length]; // happy — genome eye
+  } else if (feedState && feedState.healthPct < 0.30 && feedState.healthPct > 0) {
+    eyeChar = "·";                          // hungry — small downcast dot
+  } else if (feedState && feedState.healthPct === 0) {
+    eyeChar = "ˇ";                          // sad — inverted arch
+  } else {
+    eyeChar = UNI_EYE_CHARS[genome.GEN % UNI_EYE_CHARS.length]; // default genome eye
+  }
+
+  // ---- Proportions (character columns) ----
   const headW   = Math.max(4, Math.round(W * (0.16 + morFrac * 0.06)));
   const bodyLen = Math.max(6, Math.round(W * (0.42 + morFrac * 0.14)));
   const tailLen = Math.max(3, Math.round(W * (0.20 + appFrac * 0.14)));
 
   // Layout: creature faces left, tail extends right
-  // columns: [1 margin][headW head][bodyLen body][tailLen tail][orb nodes]
   const margin    = 1;
   const headStart = margin;
   const bodyStart = headStart + headW;
   const tailStart = bodyStart + bodyLen;
-
-  // Anatomy counts
-  const bodyRows = pct < 0.05 ? 2 : pct < 0.12 ? 3 : pct < 0.4 ? 4 : 5;
-  const legH     = pct >= 0.12 ? 2 : 0;  // 0 = newborn has no legs yet
-  const showEars = pct >= 0.08;
+  const rowWidth  = tailStart + tailLen + 6;
 
   // ---- String helpers ----
-  const sp   = n => " ".repeat(Math.max(0, n));
-  const rep  = (c, n) => { let s = ""; for (let i = 0; i < n; i++) s += c; return s; };
-  const pad  = (s, n) => s.length >= n ? s.slice(0, n) : s + sp(n - s.length);
+  const sp  = n => " ".repeat(Math.max(0, n));
+  const rep = (c, n) => { let s = ""; for (let i = 0; i < Math.max(0, n); i++) s += c; return s; };
+  const pad = (s, n) => s.length >= n ? s.slice(0, n) : s + sp(n - s.length);
+  const setCol = (arr, col, ch) => { if (col >= 0 && col < arr.length) arr[col] = ch; };
+
+  // Anatomy counts — base for standing; poses override below
+  const bodyRows = pct < 0.05 ? 2 : pct < 0.12 ? 3 : pct < 0.4 ? 4 : 5;
+  const legH     = pct >= 0.12 ? 2 : 0;
+  const ornCol   = Math.round(bodyLen * (0.30 + ornFrac * 0.42));
 
   const lines = [];
 
-  // ---- FOSSIL ----
+  // ============================================================
+  // FOSSIL — flat impression, same for all poses
+  // ============================================================
   if (fossil) {
     const fc = UNI_FOSSIL_BODY[genome.GEN % UNI_FOSSIL_BODY.length];
     const fh = UNI_FOSSIL_HEAD[genome.GEN % UNI_FOSSIL_HEAD.length];
@@ -657,52 +681,33 @@ function buildUnicodeArt(genome, age, feedState, facingRight = false) {
     for (let r = 0; r < 3; r++) lines.push(sp(headStart) + rep(fc, headW + bodyLen));
     lines.push("");
     lines.push(" 🦴 Fossil — genome preserved on-chain");
-    return lines.join("\n");
+    const bodyLines = facingRight ? lines.map(mirrorUnicodeLine) : lines;
+    const header = sigil + sex + " 🦴";
+    return header + "\n" + bodyLines.join("\n");
   }
 
-  // ---- EARS row ----
-  if (showEars) {
-    let earRow = sp(headStart) + earStyle;
-    // Mane wisps along the back (above body) for applicable genomes
-    if (hasMane && pct >= 0.25) {
-      const maneLen = Math.round(bodyLen * 0.45);
-      earRow = pad(earRow, bodyStart) + rep("'", maneLen);
-    }
-    lines.push(earRow);
-  }
-
-  // ---- DORSAL WING row (above top body row) ----
-  if (hasWing && pct >= 0.4) {
-    const wLen = Math.round(bodyLen * 0.35);
-    const wOff = bodyStart + Math.round(bodyLen * 0.28);
-    lines.push(sp(wOff) + rep("^", wLen));
-  }
-
-  // ---- BODY rows ----
-  // The head spans the vertically centred rows; top+bottom rows are outline only.
-  const headRows = Math.max(1, bodyRows - 2);
-  const headTop  = Math.floor((bodyRows - headRows) / 2);
-  // Orb column: varies by ORN so each creature has a unique pattern accent position
-  const ornCol   = Math.round(bodyLen * (0.30 + ornFrac * 0.42));
-
-  for (let r = 0; r < bodyRows; r++) {
+  // ============================================================
+  // Helper: build one body row string
+  // ============================================================
+  function bodyRow(r, totalRows, eyeOverride) {
     const isTop    = r === 0;
-    const isBottom = r === bodyRows - 1;
-    const isMid    = r === Math.floor(bodyRows / 2);
+    const isBottom = r === totalRows - 1;
+    const isMid    = r === Math.floor(totalRows / 2);
+    const headRows = Math.max(1, totalRows - 2);
+    const headTop  = Math.floor((totalRows - headRows) / 2);
     const hasHead  = r >= headTop && r < headTop + headRows;
+    const isEyeRow = hasHead && (r === headTop + Math.floor(headRows / 2));
 
-    // Row fill density: top/bottom are lighter outline chars; middle is dense
     const rowD = isTop || isBottom ? fillM : fillD;
     const rowL = isTop ? fillL : isBottom ? fillL : fillM;
 
     let line = sp(margin);
 
-    // Head column
+    // Head
     if (hasHead) {
-      const isEyeRow = (r === headTop + Math.floor(headRows / 2));
       if (isEyeRow) {
-        // snout dot + eye + body-fill + closing bracket to suggest muzzle
-        line += pad("." + eyeChar + rep(rowD, Math.max(0, headW - 3)) + ")", headW);
+        const ey = eyeOverride || eyeChar;
+        line += pad("." + ey + rep(rowD, Math.max(0, headW - 3)) + ")", headW);
       } else {
         line += rep(rowL, headW);
       }
@@ -710,67 +715,247 @@ function buildUnicodeArt(genome, age, feedState, facingRight = false) {
       line += sp(headW);
     }
 
-    // Body column
+    // Body
     let bodySeg = "";
     for (let c = 0; c < bodyLen; c++) {
       const isEdge = (c === 0 || c === bodyLen - 1);
-      // Ornament node: placed at ornCol on the middle row only (adult+)
-      if (isMid && pct >= 0.40 && c === ornCol) {
-        bodySeg += ornChar;
-      } else {
-        bodySeg += isEdge ? rowL : rowD;
-      }
+      if (isMid && pct >= 0.40 && c === ornCol) bodySeg += ornChar;
+      else bodySeg += isEdge ? rowL : rowD;
     }
     line += bodySeg;
+    return { line, isMid, isTop, isBottom };
+  }
 
-    // Tail column — tapers from wide (mid) to narrow (top/bottom)
-    if (isMid) {
-      line += rep(tailChar, tailLen);
-      // Ornament orbs float after the tail tip on mid-row (adult+)
-      if (pct >= 0.40) {
-        const orbCount = 1 + Math.floor(ornFrac * 3);  // 1–4 orbs
-        for (let o = 0; o < orbCount; o++) line += " " + ornChar;
-      }
-    } else {
-      // Taper: rows above/below mid get progressively shorter tail
-      const distFromMid = Math.abs(r - Math.floor(bodyRows / 2));
-      const taper       = 1 - (distFromMid / Math.ceil(bodyRows / 2)) * 0.65;
-      const tLen        = Math.round(tailLen * taper);
-      line += sp(tailLen - tLen) + rep(tailChar, tLen);
-      // Single sparkle on top tail edge when fertile or thriving
-      if (isTop && pct >= 0.40 && (fertile || (feedState && feedState.healthPct >= 0.55))) {
-        line += " " + ornChar;
+  // ============================================================
+  // SLEEPING — body flat on ground, no ears, eye closed, legs as pads
+  // ============================================================
+  if (pose === "sleeping") {
+    // One flat body row, head resting on ground level
+    const flatRows = Math.max(1, Math.round(bodyRows * 0.5));
+    for (let r = 0; r < flatRows; r++) {
+      const { line } = bodyRow(r, flatRows, "—");
+      // Tail wraps under — rendered as a short curl on bottom right of body
+      const tailCurl = r === flatRows - 1
+        ? sp(Math.round(tailLen * 0.3)) + rep(tailChar, Math.round(tailLen * 0.5)) + "ↄ"
+        : "";
+      lines.push(line + tailCurl);
+    }
+    // Legs as flat pads — all four compressed into one row
+    if (legH > 0) {
+      const padRow = Array(rowWidth).fill(" ");
+      const legCols = [
+        headStart + Math.round(headW * 0.30),
+        headStart + Math.round(headW * 0.80),
+        bodyStart + Math.round(bodyLen * 0.28),
+        bodyStart + Math.round(bodyLen * 0.70),
+      ];
+      for (const col of legCols) setCol(padRow, col, pawChar);
+      lines.push(padRow.join("").trimEnd());
+    }
+
+  // ============================================================
+  // ALERT — head lifted high, ears prominent, tail swept straight up
+  // ============================================================
+  } else if (pose === "alert") {
+    // Extra blank line above ears to suggest raised head posture
+    lines.push(sp(headStart) + "  ↑");   // tail-up indicator above
+    if (showEars) {
+      let earRow = sp(headStart) + earStyle;
+      if (hasMane && pct >= 0.25) earRow = pad(earRow, bodyStart) + rep("'", Math.round(bodyLen * 0.45));
+      lines.push(earRow);
+    }
+    if (hasWing && pct >= 0.4) {
+      const wOff = bodyStart + Math.round(bodyLen * 0.28);
+      lines.push(sp(wOff) + rep("^", Math.round(bodyLen * 0.35)));
+    }
+    for (let r = 0; r < bodyRows; r++) {
+      const { line, isTop } = bodyRow(r, bodyRows);
+      // Tail: swept upward — appears only on the TOP row (instead of mid)
+      const tailSeg = isTop
+        ? rep("↑", Math.round(tailLen * 0.6)) + rep(tailChar, Math.round(tailLen * 0.4))
+        : sp(tailLen);
+      lines.push(line + tailSeg);
+    }
+    if (legH > 0) {
+      const legCols = [
+        headStart + Math.round(headW * 0.30),
+        headStart + Math.round(headW * 0.82),
+        bodyStart + Math.round(bodyLen * 0.26),
+        bodyStart + Math.round(bodyLen * 0.72),
+      ];
+      for (let lr = 0; lr < legH; lr++) {
+        const chars = Array(rowWidth).fill(" ");
+        for (const col of legCols) setCol(chars, col, lr === legH - 1 ? pawChar : "|");
+        lines.push(chars.join("").trimEnd());
       }
     }
 
-    lines.push(line);
-  }
+  // ============================================================
+  // PLAYFUL — play-bow: front low, rear high, tail up, orbs scattered
+  // ============================================================
+  } else if (pose === "playful") {
+    if (showEars) {
+      // Ears skewed to the rear (body high end)
+      const rearEarOff = bodyStart + Math.round(bodyLen * 0.15);
+      lines.push(sp(rearEarOff) + earStyle);
+    }
+    // Rear of body elevated — extra row at back only
+    const rearElevRow = Array(rowWidth).fill(" ");
+    for (let c = bodyStart + Math.round(bodyLen * 0.4); c < bodyStart + bodyLen; c++) rearElevRow[c] = fillM;
+    rearElevRow[bodyStart + bodyLen - 1] = "↑"; // tail base
+    lines.push(rearElevRow.join("").trimEnd());
 
-  // ---- LEGS ----
-  if (legH > 0) {
-    // Four legs: two under head zone (front) + two under body (back)
-    const legCols = [
-      headStart + Math.round(headW * 0.30),
-      headStart + Math.round(headW * 0.82),
-      bodyStart + Math.round(bodyLen * 0.26),
-      bodyStart + Math.round(bodyLen * 0.72),
-    ];
-    const rowWidth = tailStart + tailLen + 4;
-    for (let lr = 0; lr < legH; lr++) {
-      const chars = Array(rowWidth).fill(" ");
-      for (const col of legCols) {
-        if (col < chars.length)
-          chars[col] = (lr === legH - 1) ? pawChar : "|";
+    for (let r = 0; r < bodyRows; r++) {
+      const { line, isMid, isTop } = bodyRow(r, bodyRows);
+      // Tail high on top row
+      const tailSeg = isTop
+        ? rep("↑", Math.round(tailLen * 0.7)) + rep(ornChar, 1)
+        : isMid
+          ? rep(tailChar, tailLen)
+          : sp(tailLen);
+      lines.push(line + tailSeg);
+    }
+    // Front legs stretched forward and low (extra row below body)
+    if (legH > 0) {
+      // Front legs only in the extra low row
+      const stretchRow = Array(rowWidth).fill(" ");
+      const fL1 = headStart + Math.round(headW * 0.20);
+      const fL2 = headStart + Math.round(headW * 0.70);
+      setCol(stretchRow, fL1, pawChar);
+      setCol(stretchRow, fL2, pawChar);
+      lines.push(stretchRow.join("").trimEnd());
+      // Back legs normal
+      const backRow = Array(rowWidth).fill(" ");
+      setCol(backRow, bodyStart + Math.round(bodyLen * 0.26), "|");
+      setCol(backRow, bodyStart + Math.round(bodyLen * 0.72), "|");
+      lines.push(backRow.join("").trimEnd());
+      const backPawRow = Array(rowWidth).fill(" ");
+      setCol(backPawRow, bodyStart + Math.round(bodyLen * 0.26), pawChar);
+      setCol(backPawRow, bodyStart + Math.round(bodyLen * 0.72), pawChar);
+      lines.push(backPawRow.join("").trimEnd());
+    }
+    // Scattered orbs on the playful row (excitement sparkles)
+    if (pct >= 0.40) {
+      const orbCount = 2 + Math.floor(ornFrac * 3);
+      lines.push(sp(bodyStart) + Array.from({length: orbCount}, (_, i) =>
+        sp(Math.round(bodyLen * (0.1 + i * 0.22))) + ornChar
+      ).join(""));
+    }
+
+  // ============================================================
+  // SITTING — rear down, haunches compressed, tail wrapped under
+  // ============================================================
+  } else if (pose === "sitting") {
+    if (showEars) {
+      let earRow = sp(headStart) + earStyle;
+      if (hasMane && pct >= 0.25) earRow = pad(earRow, bodyStart) + rep("'", Math.round(bodyLen * 0.45));
+      lines.push(earRow);
+    }
+    if (hasWing && pct >= 0.4) {
+      const wOff = bodyStart + Math.round(bodyLen * 0.28);
+      lines.push(sp(wOff) + rep("^", Math.round(bodyLen * 0.35)));
+    }
+    // Upper body rows (head + front half) — normal
+    const upperRows = Math.max(2, Math.ceil(bodyRows * 0.55));
+    for (let r = 0; r < upperRows; r++) {
+      const { line, isMid } = bodyRow(r, bodyRows);
+      const tailSeg = isMid ? rep(tailChar, Math.round(tailLen * 0.5)) : sp(tailLen);
+      lines.push(line + tailSeg);
+    }
+    // Haunches — two compressed rows at the rear half of the body, no tail (wrapped)
+    const haunchRow1 = Array(rowWidth).fill(" ");
+    const haunchRow2 = Array(rowWidth).fill(" ");
+    const haunchStart = bodyStart + Math.round(bodyLen * 0.45);
+    const haunchEnd   = bodyStart + bodyLen;
+    for (let c = haunchStart; c < haunchEnd; c++) { haunchRow1[c] = fillD; haunchRow2[c] = fillM; }
+    // Tail curled under — short wrap chars after haunch
+    const wrapStart = haunchEnd;
+    for (let c = 0; c < Math.round(tailLen * 0.6); c++) {
+      setCol(haunchRow2, wrapStart + c, tailChar);
+    }
+    setCol(haunchRow2, wrapStart + Math.round(tailLen * 0.6), "ↄ");
+    lines.push(haunchRow1.join("").trimEnd());
+    lines.push(haunchRow2.join("").trimEnd());
+    // Front legs straight, rear legs folded (short stubs)
+    if (legH > 0) {
+      const frontLeg1 = headStart + Math.round(headW * 0.30);
+      const frontLeg2 = headStart + Math.round(headW * 0.82);
+      const rearHaunch1 = haunchStart + Math.round((haunchEnd - haunchStart) * 0.30);
+      const rearHaunch2 = haunchStart + Math.round((haunchEnd - haunchStart) * 0.70);
+      for (let lr = 0; lr < legH; lr++) {
+        const chars = Array(rowWidth).fill(" ");
+        setCol(chars, frontLeg1, lr === legH - 1 ? pawChar : "|");
+        setCol(chars, frontLeg2, lr === legH - 1 ? pawChar : "|");
+        // Rear: just paw nubs, no vertical legs (haunches rest on ground)
+        if (lr === legH - 1) {
+          setCol(chars, rearHaunch1, pawChar);
+          setCol(chars, rearHaunch2, pawChar);
+        }
+        lines.push(chars.join("").trimEnd());
       }
-      lines.push(chars.join("").trimEnd());
+    }
+
+  // ============================================================
+  // STANDING — original layout (default)
+  // ============================================================
+  } else {
+    if (showEars) {
+      let earRow = sp(headStart) + earStyle;
+      if (hasMane && pct >= 0.25) earRow = pad(earRow, bodyStart) + rep("'", Math.round(bodyLen * 0.45));
+      lines.push(earRow);
+    }
+    if (hasWing && pct >= 0.4) {
+      const wOff = bodyStart + Math.round(bodyLen * 0.28);
+      lines.push(sp(wOff) + rep("^", Math.round(bodyLen * 0.35)));
+    }
+    for (let r = 0; r < bodyRows; r++) {
+      const { line, isMid, isTop } = bodyRow(r, bodyRows);
+      let tailSeg;
+      if (isMid) {
+        tailSeg = rep(tailChar, tailLen);
+        if (pct >= 0.40) {
+          const orbCount = 1 + Math.floor(ornFrac * 3);
+          for (let o = 0; o < orbCount; o++) tailSeg += " " + ornChar;
+        }
+      } else {
+        const distFromMid = Math.abs(r - Math.floor(bodyRows / 2));
+        const taper = 1 - (distFromMid / Math.ceil(bodyRows / 2)) * 0.65;
+        const tLen  = Math.round(tailLen * taper);
+        tailSeg = sp(tailLen - tLen) + rep(tailChar, tLen);
+        if (isTop && pct >= 0.40 && (fertile || (feedState && feedState.healthPct >= 0.55))) {
+          tailSeg += " " + ornChar;
+        }
+      }
+      lines.push(line + tailSeg);
+    }
+    if (legH > 0) {
+      const legCols = [
+        headStart + Math.round(headW * 0.30),
+        headStart + Math.round(headW * 0.82),
+        bodyStart + Math.round(bodyLen * 0.26),
+        bodyStart + Math.round(bodyLen * 0.72),
+      ];
+      for (let lr = 0; lr < legH; lr++) {
+        const chars = Array(rowWidth).fill(" ");
+        for (const col of legCols) setCol(chars, col, lr === legH - 1 ? pawChar : "|");
+        lines.push(chars.join("").trimEnd());
+      }
     }
   }
 
   // ---- HEADER line (sigil · sex · health · fertile sparkles) ----
   const healthSym = feedState && feedState.healthPct > 0 ? feedState.symbol + " " : "";
-  const header    = fertile
-    ? "✦ " + sigil + sex + " ✦"
-    : healthSym + sigil + sex;
+  // Pose accent in header
+  const poseAccent = {
+    alert:    " 👀",
+    playful:  " 🎉",
+    sitting:  " 🪑",
+    sleeping: " 💤",
+    standing: ""
+  }[pose] || "";
+  const header = fertile
+    ? "✦ " + sigil + sex + poseAccent + " ✦"
+    : healthSym + sigil + sex + poseAccent;
 
   // ---- Mirror all lines when facingRight ----
   const bodyLines = facingRight ? lines.map(mirrorUnicodeLine) : lines;
@@ -865,8 +1050,8 @@ const HomeView = {
     }
   },
   watch: {
-    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this.facingRight); },
-    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this.facingRight); },
+    age(v)        { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, v, this.feedState, this.facingRight, "standing"); },
+    feedState(fs) { if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, fs, this.facingRight, "standing"); },
     filterGenus()  { this.listPage = 1; },
     filterSex()    { this.listPage = 1; },
     filterAgeOp()  { this.listPage = 1; },
@@ -893,7 +1078,7 @@ const HomeView = {
       if (this.genusInput !== "") this.genome.GEN = Number(this.genusInput);
       this.facingRight    = Math.random() < 0.5;
       this.feedState      = null;
-      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null, this.facingRight);
+      this.unicodeArt     = buildUnicodeArt(this.genome, 0, null, this.facingRight, "standing");
       this.customTitle    = buildDefaultTitle(generateFullName(this.genome), new Date(this.birthTimestamp));
     },
     async publishCreature() {
@@ -916,7 +1101,7 @@ const HomeView = {
     generateGenusName,
     onFacingResolved(dir) {
       this.facingRight = dir;
-      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, this.feedState, dir);
+      if (this.genome) this.unicodeArt = buildUnicodeArt(this.genome, this.age, this.feedState, dir, "standing");
     }
   },
 
@@ -1493,7 +1678,7 @@ const CreatureView = {
       if (!this.genome) return false;
       return (this.postAge ?? 0) >= this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
     },
-    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState, this.facingRight) : ""; },
+    unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState, this.facingRight, this.currentPose || "standing") : ""; },
     steemitUrl()       {
       if (!this.author || !this.permlink) return null;
       return "https://steemit.com/@" + this.author + "/" + this.permlink;
@@ -2217,7 +2402,7 @@ const CreatureView = {
 
         <!-- Unicode render -->
         <h3 style="color:#a5d6a7;margin:16px 0 4px;">Unicode Render</h3>
-        <pre :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
+        <pre :key="(currentPose || 'standing') + '_' + (feedState ? feedState.healthPct : 0)" :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
 
         <!-- Genome table -->
         <h3 style="color:#a5d6a7;margin:16px 0 4px;">Genome</h3>
