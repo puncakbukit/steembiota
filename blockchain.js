@@ -1437,3 +1437,306 @@ function fetchUserComments(username, limit = 100) {
     [{ start_author: username, limit }]
   );
 }
+
+// ============================================================
+// NOTIFICATION SYSTEM
+//
+// Scans the reply trees of a user's own creature posts to find
+// events where other users interacted with them.
+// Also scans all steembiota posts for transfer_offer replies
+// naming the user as recipient.
+//
+// Event types collected:
+//   feed, play, walk         — community interactions
+//   birth                    — offspring born from user's creature
+//   transfer_offer           — someone offering ownership TO the user
+//   breed (offspring post)   — someone bred a child using user's creature as parent
+//
+// Returns Array<NotificationItem> sorted newest first:
+//   { type, actor, creatureAuthor, creaturePermlink, creatureName,
+//     ts, extra }
+// ============================================================
+
+async function fetchNotificationsForUser(username, limit = 50) {
+  if (!username) return [];
+  const notifications = [];
+
+  // ── Step 1: Get the user's own creature posts ──────────────
+  // These are the posts others can reply to with feed/play/walk/birth/transfer_offer
+  let ownPosts = [];
+  try {
+    const raw = await fetchPostsByUser(username, limit);
+    ownPosts = Array.isArray(raw) ? raw : [];
+  } catch { /* non-fatal */ }
+
+  // Filter to SteemBiota creature posts only
+  const ownCreaturePosts = ownPosts.filter(p => {
+    try {
+      const m = JSON.parse(p.json_metadata || '{}');
+      return !!(m.steembiota && m.steembiota.genome);
+    } catch { return false; }
+  });
+
+  // ── Step 2: For each creature, fetch replies and parse events ──
+  await Promise.all(ownCreaturePosts.slice(0, 20).map(async (post) => {
+    let replies = [];
+    try { replies = await fetchAllReplies(post.author, post.permlink); } catch { return; }
+
+    let sbName = post.author;
+    try { sbName = JSON.parse(post.json_metadata || '{}').steembiota?.name || post.author; } catch {}
+
+    for (const reply of replies) {
+      if (reply.author === username) continue; // skip own replies
+      let meta = {};
+      try { meta = JSON.parse(reply.json_metadata || '{}'); } catch { continue; }
+      if (!meta.steembiota) continue;
+
+      const type  = meta.steembiota.type;
+      const ts    = new Date(reply.created.endsWith('Z') ? reply.created : reply.created + 'Z');
+
+      if (type === 'feed') {
+        const food = meta.steembiota.food || 'food';
+        notifications.push({
+          type: 'feed',
+          actor: reply.author,
+          creatureAuthor: post.author,
+          creaturePermlink: post.permlink,
+          creatureName: sbName,
+          ts,
+          extra: { food }
+        });
+      } else if (type === 'play') {
+        notifications.push({
+          type: 'play',
+          actor: reply.author,
+          creatureAuthor: post.author,
+          creaturePermlink: post.permlink,
+          creatureName: sbName,
+          ts,
+          extra: {}
+        });
+      } else if (type === 'walk') {
+        notifications.push({
+          type: 'walk',
+          actor: reply.author,
+          creatureAuthor: post.author,
+          creaturePermlink: post.permlink,
+          creatureName: sbName,
+          ts,
+          extra: {}
+        });
+      } else if (type === 'birth') {
+        const child = meta.steembiota.child || {};
+        notifications.push({
+          type: 'birth',
+          actor: reply.author,
+          creatureAuthor: post.author,
+          creaturePermlink: post.permlink,
+          creatureName: sbName,
+          ts,
+          extra: { childAuthor: child.author, childPermlink: child.permlink }
+        });
+      } else if (type === 'transfer_offer' && meta.steembiota.to === username) {
+        // Someone offered this creature to the current user
+        notifications.push({
+          type: 'transfer_offer',
+          actor: reply.author,
+          creatureAuthor: post.author,
+          creaturePermlink: post.permlink,
+          creatureName: sbName,
+          ts,
+          extra: { offerPermlink: reply.permlink }
+        });
+      }
+    }
+  }));
+
+  // ── Step 3: Scan all steembiota posts for transfer_offers pointing to user ──
+  // This catches offers on creatures the user doesn't own yet (incoming transfers
+  // from creatures authored by others, where the user is the named recipient).
+  try {
+    const tagPosts = await fetchPostsByTag('steembiota', 100);
+    const incoming = Array.isArray(tagPosts) ? tagPosts.filter(p => p.author !== username) : [];
+
+    await Promise.all(incoming.slice(0, 30).map(async (post) => {
+      let meta = {};
+      try { meta = JSON.parse(post.json_metadata || '{}'); } catch { return; }
+      if (!meta.steembiota?.genome) return; // only creature posts
+
+      let replies = [];
+      try { replies = await fetchAllReplies(post.author, post.permlink); } catch { return; }
+
+      const sbName = meta.steembiota?.name || post.author;
+
+      for (const reply of replies) {
+        if (reply.author === username) continue;
+        let rmeta = {};
+        try { rmeta = JSON.parse(reply.json_metadata || '{}'); } catch { continue; }
+        if (!rmeta.steembiota) continue;
+        if (rmeta.steembiota.type !== 'transfer_offer') continue;
+        if (rmeta.steembiota.to !== username) continue;
+
+        // Check there is no subsequent cancel or accept (still pending)
+        const offerPermlink = reply.permlink;
+        const cancelled = replies.some(r => {
+          if (r.author !== post.author) return false;
+          let m = {}; try { m = JSON.parse(r.json_metadata || '{}'); } catch { return false; }
+          if (m.steembiota?.type !== 'transfer_cancel') return false;
+          return new Date(r.created) > new Date(reply.created);
+        });
+        const accepted = replies.some(r => {
+          if (r.author !== username) return false;
+          let m = {}; try { m = JSON.parse(r.json_metadata || '{}'); } catch { return false; }
+          return m.steembiota?.type === 'transfer_accept' &&
+                 m.steembiota?.offer_permlink === offerPermlink;
+        });
+
+        if (!cancelled && !accepted) {
+          const ts = new Date(reply.created.endsWith('Z') ? reply.created : reply.created + 'Z');
+          // Only add if not already found in own-post scan
+          const alreadyHave = notifications.some(n =>
+            n.type === 'transfer_offer' &&
+            n.creatureAuthor === post.author &&
+            n.creaturePermlink === post.permlink
+          );
+          if (!alreadyHave) {
+            notifications.push({
+              type: 'transfer_offer',
+              actor: reply.author,
+              creatureAuthor: post.author,
+              creaturePermlink: post.permlink,
+              creatureName: sbName,
+              ts,
+              extra: { offerPermlink }
+            });
+          }
+        }
+      }
+    }));
+  } catch { /* non-fatal */ }
+
+  // ── Step 4: Scan all steembiota offspring posts where user's creature is a parent ──
+  // (breed notifications — someone used user's creature to breed)
+  try {
+    const tagPosts = await fetchPostsByTag('steembiota', 100);
+    for (const post of (Array.isArray(tagPosts) ? tagPosts : [])) {
+      if (post.author === username) continue;
+      let meta = {};
+      try { meta = JSON.parse(post.json_metadata || '{}'); } catch { continue; }
+      const sb = meta.steembiota;
+      if (!sb?.genome || sb.type !== 'offspring') continue;
+      const pA = sb.parentA;
+      const pB = sb.parentB;
+      const usedUserCreature =
+        (pA && pA.author === username) ||
+        (pB && pB.author === username);
+      if (!usedUserCreature) continue;
+
+      const ts = new Date(post.created.endsWith('Z') ? post.created : post.created + 'Z');
+      notifications.push({
+        type: 'breed',
+        actor: post.author,
+        creatureAuthor: post.author,
+        creaturePermlink: post.permlink,
+        creatureName: sb.name || post.author,
+        ts,
+        extra: { parentA: pA, parentB: pB }
+      });
+    }
+  } catch { /* non-fatal */ }
+
+  // Sort newest first, deduplicate by (type+creatureAuthor+creaturePermlink+actor)
+  const seen = new Set();
+  return notifications
+    .filter(n => {
+      const key = `${n.type}::${n.actor}::${n.creatureAuthor}::${n.creaturePermlink}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => b.ts - a.ts);
+}
+
+// ============================================================
+// OWNED CREATURES — resolves effective ownership from transfer chain
+//
+// Returns all SteemBiota creature posts where effectiveOwner === username.
+// Includes both posts authored by username AND posts authored by others
+// that have been transferred to username.
+//
+// Strategy (efficient):
+//  1. Fetch user's own posts (fast path — most creatures stay with author)
+//  2. Fetch all steembiota tag posts authored by others
+//  3. For posts authored by others, fetch replies and check ownership chain
+//     (only when the post has transfer-related replies — cheap heuristic)
+// ============================================================
+
+async function fetchCreaturesOwnedBy(username, limit = 100) {
+  if (!username) return [];
+  const results = [];
+
+  // ── Own posts (fast path) ──────────────────────────────────
+  try {
+    const raw = await fetchPostsByUser(username, limit);
+    for (const p of (Array.isArray(raw) ? raw : [])) {
+      let meta = {};
+      try { meta = JSON.parse(p.json_metadata || '{}'); } catch { continue; }
+      if (!meta.steembiota?.genome) continue;
+
+      // Check if this creature has been transferred away
+      let replies = [];
+      try { replies = await fetchAllReplies(p.author, p.permlink); } catch {}
+
+      // Quick check: does any reply look like a transfer event?
+      const hasTransferReplies = replies.some(r => {
+        try {
+          const m = JSON.parse(r.json_metadata || '{}');
+          return ['transfer_offer','transfer_accept','transfer_cancel']
+            .includes(m.steembiota?.type);
+        } catch { return false; }
+      });
+
+      let effectiveOwner = p.author;
+      if (hasTransferReplies) {
+        const chain = parseOwnershipChain(replies, p.author);
+        effectiveOwner = chain.effectiveOwner;
+      }
+
+      if (effectiveOwner === username) {
+        results.push({ post: p, meta: meta.steembiota, effectiveOwner });
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  // ── Incoming transfers (creatures authored by others) ──────
+  try {
+    const tagPosts = await fetchPostsByTag('steembiota', 100);
+    for (const p of (Array.isArray(tagPosts) ? tagPosts : [])) {
+      if (p.author === username) continue; // already handled above
+      let meta = {};
+      try { meta = JSON.parse(p.json_metadata || '{}'); } catch { continue; }
+      if (!meta.steembiota?.genome) continue;
+
+      // Only fetch replies if there's any chance of a transfer
+      // Heuristic: check the post's json_metadata for a steembiota marker
+      let replies = [];
+      try { replies = await fetchAllReplies(p.author, p.permlink); } catch { continue; }
+
+      const hasTransferReplies = replies.some(r => {
+        try {
+          const m = JSON.parse(r.json_metadata || '{}');
+          return ['transfer_offer','transfer_accept','transfer_cancel']
+            .includes(m.steembiota?.type);
+        } catch { return false; }
+      });
+      if (!hasTransferReplies) continue;
+
+      const chain = parseOwnershipChain(replies, p.author);
+      if (chain.effectiveOwner === username) {
+        results.push({ post: p, meta: meta.steembiota, effectiveOwner: username });
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  return results;
+}

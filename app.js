@@ -1042,11 +1042,20 @@ const HomeView = {
         </div>
         <template v-else>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
-          <creature-card-component
+          <div
             v-for="c in pagedCreatures"
             :key="c.author + '/' + c.permlink"
-            :post="c"
-          ></creature-card-component>
+            style="position:relative;"
+          >
+            <creature-card-component :post="c"></creature-card-component>
+            <div
+              v-if="c.effectiveOwner && c.effectiveOwner !== c.author"
+              style="position:absolute;bottom:6px;left:6px;
+                     font-size:0.62rem;padding:2px 6px;border-radius:8px;
+                     background:#0d1a0d;border:1px solid #2e7d32;color:#66bb6a;
+                     pointer-events:none;"
+            >🤝 transferred</div>
+          </div>
         </div>
 
         <div v-if="totalPages > 1" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:14px;">
@@ -1243,8 +1252,33 @@ const ProfileView = {
     const user = this.$route.params.user;
     this.loading = true;
     try {
-      const raw = await fetchPostsByUser(user, 100);
-      this.creatures = parseSteembiotaPosts(Array.isArray(raw) ? raw : []);
+      // fetchCreaturesOwnedBy resolves effectiveOwner via transfer chains,
+      // so transferred creatures appear here and disappear from old owner.
+      const owned = await fetchCreaturesOwnedBy(user, 100);
+      // Convert to the same shape parseSteembiotaPosts produces
+      this.creatures = owned.map(({ post: p, meta: sb, effectiveOwner }) => {
+        const age = calculateAge(p.created);
+        return {
+          author:           p.author,
+          permlink:         p.permlink,
+          name:             sb.name || p.author,
+          genome:           sb.genome,
+          age,
+          lifecycleStage:   getLifecycleStage(age, sb.genome),
+          type:             sb.type || "founder",
+          parentA:          sb.parentA || null,
+          parentB:          sb.parentB || null,
+          speciated:        sb.speciated || false,
+          fingerprint:      genomeFingerprint(sb.genome),
+          isDuplicate:      false,
+          isPhantom:        false,
+          originalAuthor:   null,
+          originalPermlink: null,
+          originalCreated:  null,
+          created:          p.created || "",
+          effectiveOwner
+        };
+      }).sort((a, b) => (b.created > a.created ? 1 : -1));
     } catch (e) {
       this.loadError = e.message || "Failed to load creatures.";
       this.notify("Failed to load profile.", "error");
@@ -1292,7 +1326,8 @@ const ProfileView = {
       <!-- User heading -->
       <h2 style="color:#a5d6a7;margin:0 0 4px;">@{{ username }}</h2>
       <p style="color:#555;font-size:13px;margin:0 0 16px;">
-        Creatures bred by this user
+        Creatures owned by this user
+        <span style="color:#3a3a3a;"> (includes transfers)</span>
       </p>
 
       <loading-spinner-component v-if="loading"></loading-spinner-component>
@@ -2360,12 +2395,230 @@ const LeaderboardView = {
 };
 
 
+// ---- NotificationsView ----
+// Shows all recent on-chain interactions relevant to the logged-in user:
+// feed, play, walk, birth (offspring from user's creature), breed (someone
+// used user's creature as a parent), and transfer_offer (pending ownership
+// handoffs where this user is the named recipient).
+const NotificationsView = {
+  name: "NotificationsView",
+  inject: ["username", "notify"],
+  data() {
+    return {
+      loading:       true,
+      loadError:     "",
+      notifications: [],
+      accepting:     {},   // offerPermlink → true while publishing accept
+    };
+  },
+  async created() {
+    if (!this.username) {
+      this.loading = false;
+      return;
+    }
+    this.loading = true;
+    try {
+      this.notifications = await fetchNotificationsForUser(this.username, 50);
+    } catch (e) {
+      this.loadError = e.message || "Failed to load notifications.";
+    }
+    this.loading = false;
+  },
+  computed: {
+    hasAny() { return this.notifications.length > 0; },
+    pendingOffers() {
+      return this.notifications.filter(n => n.type === "transfer_offer");
+    }
+  },
+  methods: {
+    icon(type) {
+      return {
+        feed:           "🍖",
+        play:           "🎾",
+        walk:           "🐾",
+        birth:          "🐣",
+        breed:          "🧬",
+        transfer_offer: "🤝"
+      }[type] || "📢";
+    },
+    label(n) {
+      const clink = `/#/@${n.creatureAuthor}/${n.creaturePermlink}`;
+      const cname = n.creatureName || n.creatureAuthor;
+      switch (n.type) {
+        case "feed":
+          return `@${n.actor} fed <strong>${cname}</strong> (${n.extra?.food || "food"})`;
+        case "play":
+          return `@${n.actor} played with <strong>${cname}</strong>`;
+        case "walk":
+          return `@${n.actor} walked <strong>${cname}</strong>`;
+        case "birth":
+          return `@${n.actor} bred an offspring from <strong>${cname}</strong>`;
+        case "breed":
+          return `@${n.actor} used <strong>${cname}</strong>'s lineage to breed a new creature`;
+        case "transfer_offer":
+          return `@${n.actor} is offering you ownership of <strong>${cname}</strong>`;
+        default:
+          return `@${n.actor} interacted with <strong>${cname}</strong>`;
+      }
+    },
+    timeAgo(ts) {
+      const diff = (Date.now() - new Date(ts)) / 1000;
+      if (diff < 60)    return Math.round(diff) + "s ago";
+      if (diff < 3600)  return Math.round(diff / 60) + "m ago";
+      if (diff < 86400) return Math.round(diff / 3600) + "h ago";
+      return Math.round(diff / 86400) + "d ago";
+    },
+    async acceptOffer(n) {
+      if (!window.steem_keychain) {
+        this.notify("Steem Keychain not installed.", "error");
+        return;
+      }
+      const key = n.extra.offerPermlink;
+      this.accepting = { ...this.accepting, [key]: true };
+      publishTransferAccept(
+        this.username,
+        n.creatureAuthor,
+        n.creaturePermlink,
+        n.creatureName,
+        n.extra.offerPermlink,
+        (res) => {
+          const accepting = { ...this.accepting };
+          delete accepting[key];
+          this.accepting = accepting;
+          if (res.success) {
+            this.notify(`✅ You now own ${n.creatureName}! Visit your profile to see it.`, "success");
+            // Remove this offer from the list
+            this.notifications = this.notifications.filter(
+              x => !(x.type === "transfer_offer" &&
+                     x.creatureAuthor === n.creatureAuthor &&
+                     x.creaturePermlink === n.creaturePermlink)
+            );
+          } else {
+            this.notify("Accept failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    }
+  },
+  template: `
+    <div style="margin-top:20px;padding:0 16px;max-width:720px;margin-left:auto;margin-right:auto;">
+
+      <h2 style="color:#a5d6a7;margin:0 0 4px;">🔔 Notifications</h2>
+
+      <div v-if="!username" style="color:#555;font-size:14px;margin-top:16px;">
+        Please log in to see your notifications.
+      </div>
+
+      <loading-spinner-component v-else-if="loading"></loading-spinner-component>
+
+      <div v-else-if="loadError" style="color:#ff8a80;font-size:13px;">⚠ {{ loadError }}</div>
+
+      <template v-else>
+
+        <!-- Pending transfer offers banner — shown at top for urgency -->
+        <div
+          v-if="pendingOffers.length"
+          style="margin-bottom:20px;padding:14px 16px;border-radius:10px;
+                 background:#0d1a0d;border:1px solid #2e7d32;"
+        >
+          <div style="font-size:0.9rem;font-weight:bold;color:#a5d6a7;margin-bottom:10px;">
+            🤝 {{ pendingOffers.length }} Pending Transfer Offer{{ pendingOffers.length > 1 ? "s" : "" }}
+          </div>
+          <div
+            v-for="n in pendingOffers"
+            :key="n.creatureAuthor + n.creaturePermlink"
+            style="padding:10px 0;border-bottom:1px solid #1a2a1a;display:flex;
+                   align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;"
+          >
+            <div>
+              <span style="font-size:0.85rem;color:#ccc;">
+                @{{ n.actor }} → <strong style="color:#a5d6a7;">{{ n.creatureName }}</strong>
+              </span>
+              <div style="font-size:0.72rem;color:#555;margin-top:2px;">
+                <router-link :to="'/@' + n.creatureAuthor + '/' + n.creaturePermlink"
+                  style="color:#555;text-decoration:underline;">
+                  view creature page
+                </router-link>
+              </div>
+            </div>
+            <button
+              @click="acceptOffer(n)"
+              :disabled="accepting[n.extra.offerPermlink]"
+              style="background:#1a3a1a;font-size:0.8rem;padding:6px 14px;
+                     border:1px solid #2e7d32;border-radius:6px;"
+            >
+              {{ accepting[n.extra.offerPermlink] ? "Publishing…" : "✅ Accept" }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="!hasAny" style="color:#555;font-size:13px;margin-top:8px;">
+          No notifications yet. When others feed, play with, or breed from your
+          creatures — or offer you a transfer — it will appear here.
+        </div>
+
+        <!-- Full activity feed -->
+        <div v-else>
+          <p style="font-size:12px;color:#444;margin:0 0 12px;">
+            {{ notifications.length }} recent event{{ notifications.length === 1 ? "" : "s" }}
+          </p>
+          <div
+            v-for="(n, i) in notifications"
+            :key="i"
+            style="display:flex;align-items:flex-start;gap:12px;padding:10px 0;
+                   border-bottom:1px solid #151515;"
+          >
+            <!-- Icon -->
+            <div style="font-size:1.3rem;line-height:1;padding-top:2px;flex-shrink:0;">
+              {{ icon(n.type) }}
+            </div>
+            <!-- Body -->
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:0.84rem;color:#ccc;line-height:1.4;" v-html="label(n)"></div>
+              <div style="display:flex;gap:12px;align-items:center;margin-top:5px;flex-wrap:wrap;">
+                <span style="font-size:0.72rem;color:#444;">{{ timeAgo(n.ts) }}</span>
+                <router-link
+                  :to="'/@' + n.creatureAuthor + '/' + n.creaturePermlink"
+                  style="font-size:0.72rem;color:#555;text-decoration:underline;"
+                >
+                  view creature
+                </router-link>
+                <router-link
+                  v-if="n.type === 'birth' && n.extra.childAuthor"
+                  :to="'/@' + n.extra.childAuthor + '/' + n.extra.childPermlink"
+                  style="font-size:0.72rem;color:#555;text-decoration:underline;"
+                >
+                  view offspring
+                </router-link>
+              </div>
+            </div>
+            <!-- Inline accept for transfer offers in the feed -->
+            <div v-if="n.type === 'transfer_offer'" style="flex-shrink:0;">
+              <button
+                @click="acceptOffer(n)"
+                :disabled="accepting[n.extra.offerPermlink]"
+                style="background:#1a3a1a;font-size:0.75rem;padding:5px 10px;
+                       border:1px solid #2e7d32;border-radius:6px;"
+              >
+                {{ accepting[n.extra.offerPermlink] ? "…" : "✅ Accept" }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+    </div>
+  `
+};
+
+
 const routes = [
-  { path: "/",                    component: HomeView       },
-  { path: "/about",               component: AboutView      },
-  { path: "/leaderboard",         component: LeaderboardView },
-  { path: "/@:author/:permlink",  component: CreatureView   },
-  { path: "/@:user",              component: ProfileView    },
+  { path: "/",                    component: HomeView          },
+  { path: "/about",               component: AboutView         },
+  { path: "/leaderboard",         component: LeaderboardView   },
+  { path: "/notifications",       component: NotificationsView },
+  { path: "/@:author/:permlink",  component: CreatureView      },
+  { path: "/@:user",              component: ProfileView       },
 ];
 
 const router = createRouter({
@@ -2423,6 +2676,20 @@ const App = {
       }
     }
 
+    // ── Notification badge — count of pending transfer offers ──
+    // Polled on login + every 5 minutes. Lightweight: only fetches the
+    // user's own creature posts then scans their replies for pending offers.
+    const notifBadgeCount = ref(0);
+    let _notifPollTimer = null;
+
+    async function refreshNotifBadge(user) {
+      if (!user) { notifBadgeCount.value = 0; return; }
+      try {
+        const notifs = await fetchNotificationsForUser(user, 50);
+        notifBadgeCount.value = notifs.filter(n => n.type === "transfer_offer").length;
+      } catch { /* non-fatal */ }
+    }
+
     function notify(message, type = "error") {
       notification.value = { message, type };
     }
@@ -2434,6 +2701,11 @@ const App = {
       setRPC(0);
       // Always load a profile — logged-in user's own, or @steembiota as fallback
       loadProfile(username.value || "");
+      // Start notification badge polling if already logged in
+      if (username.value) {
+        refreshNotifBadge(username.value);
+        _notifPollTimer = setInterval(() => refreshNotifBadge(username.value), 5 * 60 * 1000);
+      }
       let attempts = 0;
       const interval = setInterval(() => {
         attempts++;
@@ -2471,6 +2743,10 @@ const App = {
         showLoginForm.value = false;
         notify("Logged in as @" + user, "success");
         loadProfile(user);
+        // Start notification badge polling on login
+        refreshNotifBadge(user);
+        if (_notifPollTimer) clearInterval(_notifPollTimer);
+        _notifPollTimer = setInterval(() => refreshNotifBadge(user), 5 * 60 * 1000);
       });
     }
 
@@ -2478,6 +2754,8 @@ const App = {
       username.value = "";
       localStorage.removeItem("steem_user");
       showLoginForm.value = false;
+      notifBadgeCount.value = 0;
+      if (_notifPollTimer) { clearInterval(_notifPollTimer); _notifPollTimer = null; }
       loadProfile(""); // fall back to @steembiota
     }
 
@@ -2490,7 +2768,8 @@ const App = {
       username, hasKeychain, keychainReady,
       loginError, showLoginForm, isLoggingIn,
       notification, notify, dismissNotification,
-      login, logout, profileData, userLevel
+      login, logout, profileData, userLevel,
+      notifBadgeCount
     };
   },
 
@@ -2507,6 +2786,23 @@ const App = {
       >Profile</router-link>
       <router-link to="/leaderboard" exact-active-class="nav-active">🏆 Leaderboard</router-link>
       <router-link to="/about"       exact-active-class="nav-active">About</router-link>
+
+      <!-- Notifications link — only shown when logged in, with badge for pending offers -->
+      <router-link
+        v-if="username"
+        to="/notifications"
+        exact-active-class="nav-active"
+        style="position:relative;"
+      >
+        🔔
+        <span
+          v-if="notifBadgeCount > 0"
+          style="position:absolute;top:-6px;right:-10px;
+                 background:#e53935;color:#fff;font-size:0.6rem;font-weight:bold;
+                 border-radius:50%;min-width:16px;height:16px;line-height:16px;
+                 text-align:center;padding:0 2px;"
+        >{{ notifBadgeCount }}</span>
+      </router-link>
 
       <a v-if="!username" href="#" @click.prevent="showLoginForm = !showLoginForm">Login</a>
       <a v-else           href="#" @click.prevent="logout">Logout (@{{ username }})</a>
