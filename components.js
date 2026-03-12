@@ -2853,18 +2853,12 @@ const SocialPanelComponent = {
   emits: ["notify", "comment-posted"],
   data() {
     return {
-      votesExpanded:    false,
-      resteemsExpanded: false,
-      commentsExpanded: true,   // comments open by default — most engaging
+      commentsExpanded: true,   // comments open by default
       commentText:      "",
       submitting:       false
     };
   },
   computed: {
-    voteCount()    { return this.votes.length; },
-    positiveVotes(){ return this.votes.filter(v => v.percent > 0); },
-    topVoters()    { return this.positiveVotes.slice(0, 12); },
-    resteemsCount(){ return this.rebloggers.length; },
     commentCount() { return this.socialComments.length; }
   },
   methods: {
@@ -2941,81 +2935,6 @@ const SocialPanelComponent = {
       </div>
 
       <template v-else>
-
-        <!-- ===== UPVOTES ===== -->
-        <div style="margin-bottom:10px;">
-          <div
-            @click="votesExpanded = !votesExpanded"
-            style="display:flex;align-items:center;justify-content:space-between;
-                   cursor:pointer;padding:9px 14px;border-radius:8px;
-                   background:#0a0a0a;border:1px solid #1e1e1e;user-select:none;"
-          >
-            <span style="font-size:0.85rem;color:#ef9a9a;">
-              ❤️ <strong>{{ voteCount }}</strong>
-              Upvote{{ voteCount === 1 ? "" : "s" }}
-            </span>
-            <span style="font-size:0.72rem;color:#333;">{{ votesExpanded ? "▲" : "▼" }}</span>
-          </div>
-
-          <div v-if="votesExpanded" style="
-            border:1px solid #1e1e1e;border-top:none;border-radius:0 0 8px 8px;
-            background:#080808;padding:12px 14px;
-          ">
-            <div v-if="voteCount === 0" style="font-size:0.78rem;color:#333;">
-              No upvotes yet.
-            </div>
-            <div v-else style="display:flex;flex-wrap:wrap;gap:6px;">
-              <a
-                v-for="v in topVoters"
-                :key="v.voter"
-                :href="profileUrl(v.voter)"
-                style="font-size:0.72rem;padding:2px 8px;border-radius:10px;
-                       background:#1a0a0a;border:1px solid #2e1a1a;color:#ef9a9a;
-                       text-decoration:none;"
-                :title="v.percent > 0 ? '+' + (v.percent / 100).toFixed(0) + '%' : 'downvote'"
-              >@{{ v.voter }}</a>
-              <span
-                v-if="positiveVotes.length > 12"
-                style="font-size:0.72rem;color:#444;padding:2px 6px;"
-              >+ {{ positiveVotes.length - 12 }} more</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- ===== RESTEEMS ===== -->
-        <div style="margin-bottom:10px;">
-          <div
-            @click="resteemsExpanded = !resteemsExpanded"
-            style="display:flex;align-items:center;justify-content:space-between;
-                   cursor:pointer;padding:9px 14px;border-radius:8px;
-                   background:#0a0a0a;border:1px solid #1e1e1e;user-select:none;"
-          >
-            <span style="font-size:0.85rem;color:#80cbc4;">
-              🔁 <strong>{{ resteemsCount }}</strong>
-              Resteem{{ resteemsCount === 1 ? "" : "s" }}
-            </span>
-            <span style="font-size:0.72rem;color:#333;">{{ resteemsExpanded ? "▲" : "▼" }}</span>
-          </div>
-
-          <div v-if="resteemsExpanded" style="
-            border:1px solid #1e1e1e;border-top:none;border-radius:0 0 8px 8px;
-            background:#080808;padding:12px 14px;
-          ">
-            <div v-if="resteemsCount === 0" style="font-size:0.78rem;color:#333;">
-              No resteems yet.
-            </div>
-            <div v-else style="display:flex;flex-wrap:wrap;gap:6px;">
-              <a
-                v-for="user in rebloggers"
-                :key="user"
-                :href="profileUrl(user)"
-                style="font-size:0.72rem;padding:2px 8px;border-radius:10px;
-                       background:#0a1a1a;border:1px solid #1a2e2e;color:#80cbc4;
-                       text-decoration:none;"
-              >@{{ user }}</a>
-            </div>
-          </div>
-        </div>
 
         <!-- ===== COMMENTS ===== -->
         <div>
