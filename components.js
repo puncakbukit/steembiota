@@ -2111,7 +2111,7 @@ const BreedingPanelComponent = {
         this._facingRight = Math.random() < 0.5;
         this.childGenome = child;
         this.childName   = generateFullName(child);
-        this.childArt    = buildUnicodeArt(child, 0, null, this._facingRight);
+        this.childArt    = buildUnicodeArt(child, 0, null, this._facingRight, "standing");
         this.customTitle = buildDefaultTitle(this.childName, new Date());
         this.breedInfo   = { mutated, speciated,
           parentA: { author: resA.author, permlink: resA.permlink },
