@@ -1486,30 +1486,33 @@ const CreatureCardComponent = {
           🧬 {{ post.name }}
         </div>
 
-        <!-- Upvote row -->
-        <div style="display:flex;align-items:center;justify-content:center;gap:6px;
-                    margin-top:5px;position:relative;" @click.prevent.stop>
-          <!-- Count -->
-          <span v-if="!socialLoading" style="font-size:0.72rem;color:#ef9a9a;" title="Upvotes">
-            ❤️ {{ votes.length }}
-          </span>
-          <span v-else style="font-size:0.68rem;color:#333;">❤️ …</span>
-
-          <!-- Upvote button / already-voted tick -->
+        <!-- Row 1: sex · age · lifecycle  ·  ❤️ count  [↑] -->
+        <div style="font-size:0.70rem;margin-top:5px;display:flex;gap:5px;
+                    justify-content:center;align-items:center;flex-wrap:wrap;
+                    position:relative;" @click.prevent.stop>
+          <span style="color:#888;">{{ sexSymbol }}</span>
+          <span style="color:#444;">·</span>
+          <span style="color:#888;">{{ post.age }}d</span>
+          <span style="color:#444;">·</span>
+          <span :style="{ color: stageColor }">{{ stageLabel }}</span>
+          <span style="color:#444;">·</span>
+          <!-- Upvote count -->
+          <span v-if="!socialLoading" style="color:#ef9a9a;" title="Upvotes">❤️ {{ votes.length }}</span>
+          <span v-else style="color:#333;">❤️ …</span>
+          <!-- Upvote button or tick -->
           <template v-if="username">
             <button
               v-if="!hasVoted"
               @click="toggleVotePicker"
               :disabled="votingInProgress"
               title="Upvote this creature"
-              style="padding:1px 7px;font-size:0.68rem;line-height:1.5;
+              style="padding:0 5px;font-size:0.66rem;line-height:1.5;
                      background:#1a0a0a;border:1px solid #4a1a1a;color:#ef9a9a;
                      border-radius:4px;cursor:pointer;"
-            >{{ votingInProgress ? "…" : "↑ Vote" }}</button>
-            <span v-else style="font-size:0.68rem;color:#ef5350;" title="You upvoted this">✓ Voted</span>
+            >{{ votingInProgress ? "…" : "↑" }}</button>
+            <span v-else style="color:#ef5350;font-size:0.66rem;" title="You upvoted this">✓</span>
           </template>
-
-          <!-- % picker popover -->
+          <!-- % picker popover — anchored to this row -->
           <div
             v-if="votePickerOpen"
             style="position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
@@ -1517,7 +1520,6 @@ const CreatureCardComponent = {
                    padding:10px 12px;min-width:155px;z-index:300;
                    box-shadow:0 4px 18px rgba(0,0,0,0.8);"
           >
-            <!-- Dismiss overlay -->
             <div @click.stop="votePickerOpen = false"
                  style="position:fixed;inset:0;z-index:-1;"></div>
             <div style="font-size:0.7rem;color:#ef9a9a;font-weight:bold;
@@ -1539,40 +1541,31 @@ const CreatureCardComponent = {
           </div>
         </div>
 
-        <!-- Resteem row -->
-        <div style="display:flex;align-items:center;justify-content:center;gap:6px;
-                    margin-top:4px;" @click.prevent.stop>
-          <span v-if="!socialLoading" style="font-size:0.72rem;color:#80cbc4;" title="Resteems">
-            🔁 {{ rebloggers.length }}
+        <!-- Row 2: @author · provenance badge  ·  🔁 count  [↺] -->
+        <div style="font-size:0.65rem;margin-top:3px;display:flex;gap:4px;
+                    justify-content:center;align-items:center;flex-wrap:wrap;"
+             @click.prevent.stop>
+          <span style="color:#3a3a3a;">@{{ post.author }}</span>
+          <span :style="{ color: provenanceBadge.color, fontSize:'0.63rem' }">
+            {{ provenanceBadge.icon }} {{ provenanceBadge.label }}
           </span>
-          <span v-else style="font-size:0.68rem;color:#333;">🔁 …</span>
+          <span style="color:#333;">·</span>
+          <!-- Resteem count -->
+          <span v-if="!socialLoading" style="color:#80cbc4;" title="Resteems">🔁 {{ rebloggers.length }}</span>
+          <span v-else style="color:#333;">🔁 …</span>
+          <!-- Resteem button or tick -->
           <template v-if="username">
             <button
               v-if="!hasResteemed"
               @click="submitResteem"
               :disabled="resteemInProgress"
               title="Resteem this creature"
-              style="padding:1px 7px;font-size:0.68rem;line-height:1.5;
+              style="padding:0 5px;font-size:0.63rem;line-height:1.5;
                      background:#0a1a1a;border:1px solid #1a3a3a;color:#80cbc4;
                      border-radius:4px;cursor:pointer;"
-            >{{ resteemInProgress ? "…" : "↺ Resteem" }}</button>
-            <span v-else style="font-size:0.68rem;color:#26c6da;" title="You resteemed this">✓ Resteemed</span>
+            >{{ resteemInProgress ? "…" : "↺" }}</button>
+            <span v-else style="color:#26c6da;font-size:0.63rem;" title="You resteemed this">✓</span>
           </template>
-        </div>
-
-        <!-- Sex / age / lifecycle -->
-        <div style="font-size:0.70rem;margin-top:5px;display:flex;gap:5px;justify-content:center;flex-wrap:wrap;">
-          <span style="color:#888;">{{ sexSymbol }}</span>
-          <span style="color:#444;">·</span>
-          <span style="color:#888;">{{ post.age }}d</span>
-          <span style="color:#444;">·</span>
-          <span :style="{ color: stageColor }">{{ stageLabel }}</span>
-        </div>
-        <div style="font-size:0.65rem;margin-top:3px;display:flex;gap:4px;justify-content:center;align-items:center;flex-wrap:wrap;">
-          <span style="color:#3a3a3a;">@{{ post.author }}</span>
-          <span :style="{ color: provenanceBadge.color, fontSize:'0.63rem' }">
-            {{ provenanceBadge.icon }} {{ provenanceBadge.label }}
-          </span>
         </div>
         <button
           @click="copyUrl"
