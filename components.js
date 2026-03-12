@@ -2086,13 +2086,15 @@ const BreedingPanelComponent = {
         checkFertility(resB, "Parent B");
 
         // ---- Breed permit check ----
-        // Opt-in model: owner always allowed; others need a named active permit.
+        // Opt-in model: effective owner always allowed; others need a named active permit.
+        // res.effectiveOwner comes from loadGenomeFromPost (transfer-aware).
         const checkPermit = (res, label) => {
-          if (!isBreedingPermitted(res.author, this.username, res.permits)) {
+          const owner = res.effectiveOwner || res.author;
+          if (!isBreedingPermitted(owner, this.username, res.permits)) {
             throw new Error(
-              `${label} (@${res.author}) requires a breed permit. ` +
-              `Only @${res.author} or users with an active permit can use this creature. ` +
-              `Contact @${res.author} to request one.`
+              `${label} (@${owner}) requires a breed permit. ` +
+              `Only @${owner} or users with an active permit can use this creature. ` +
+              `Contact @${owner} to request one.`
             );
           }
         };
@@ -2513,6 +2515,304 @@ const BreedPermitPanelComponent = {
         </div>
 
       </div>
+    </div>
+  `
+};
+
+// ============================================================
+// TransferPanelComponent
+// Shown on the creature page for TWO audiences:
+//   A) The effective owner — can send an offer or cancel a pending one.
+//   B) The pending recipient — can accept or ignore (ignore = do nothing).
+//
+// Props:
+//   username           — logged-in user
+//   creatureAuthor     — original post.author (needed for reply targeting)
+//   creaturePermlink   — creature post permlink
+//   creatureName       — display name
+//   transferState      — result of parseOwnershipChain()
+//   isOwner            — boolean (current effective owner)
+//   isPendingRecipient — boolean (named in the pending offer)
+//
+// Emits:
+//   notify(msg, type)
+//   transfer-updated(newTransferState)  — optimistic state update
+// ============================================================
+const TransferPanelComponent = {
+  name: "TransferPanelComponent",
+  props: {
+    username:           String,
+    creatureAuthor:     String,
+    creaturePermlink:   String,
+    creatureName:       String,
+    transferState:      { type: Object, default: null },
+    isOwner:            { type: Boolean, default: false },
+    isPendingRecipient: { type: Boolean, default: false }
+  },
+  emits: ["notify", "transfer-updated"],
+  data() {
+    return {
+      expanded:    false,
+      recipientInput: "",
+      publishing:  false
+    };
+  },
+  computed: {
+    pendingOffer()    { return this.transferState?.pendingOffer || null; },
+    transferHistory() { return this.transferState?.transferHistory || []; },
+    hasHistory()      { return this.transferHistory.length > 0; }
+  },
+  methods: {
+    async sendOffer() {
+      const to = this.recipientInput.trim().toLowerCase();
+      if (!to) {
+        this.$emit("notify", "Please enter a recipient username.", "error");
+        return;
+      }
+      if (to === this.username) {
+        this.$emit("notify", "You cannot transfer to yourself.", "error");
+        return;
+      }
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      this.publishing = true;
+      publishTransferOffer(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        to,
+        (response) => {
+          this.publishing = false;
+          if (response.success) {
+            this.$emit("notify", `🤝 Transfer offer sent to @${to}. Waiting for acceptance.`, "success");
+            this.recipientInput = "";
+            // Optimistic update — build a synthetic pending offer
+            const syntheticState = {
+              ...(this.transferState || {}),
+              effectiveOwner:  this.username,
+              pendingOffer:    { to, offerPermlink: response.permlink || "pending", ts: new Date() },
+              permitsValidFrom: this.transferState?.permitsValidFrom || null,
+              transferHistory: this.transferHistory
+            };
+            this.$emit("transfer-updated", syntheticState);
+          } else {
+            this.$emit("notify", "Offer failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async cancelOffer() {
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      this.publishing = true;
+      publishTransferCancel(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        (response) => {
+          this.publishing = false;
+          if (response.success) {
+            this.$emit("notify", "❌ Transfer offer cancelled.", "success");
+            const syntheticState = {
+              ...(this.transferState || {}),
+              effectiveOwner:  this.username,
+              pendingOffer:    null,
+              permitsValidFrom: this.transferState?.permitsValidFrom || null,
+              transferHistory: this.transferHistory
+            };
+            this.$emit("transfer-updated", syntheticState);
+          } else {
+            this.$emit("notify", "Cancel failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async acceptOffer() {
+      if (!this.pendingOffer) return;
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      this.publishing = true;
+      publishTransferAccept(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        this.pendingOffer.offerPermlink,
+        (response) => {
+          this.publishing = false;
+          if (response.success) {
+            this.$emit("notify", `✅ You are now the owner of ${this.creatureName}!`, "success");
+            const now = new Date();
+            const syntheticState = {
+              effectiveOwner:  this.username,
+              pendingOffer:    null,
+              permitsValidFrom: now,
+              transferHistory: [
+                ...this.transferHistory,
+                { from: this.pendingOffer.offeredBy || "previous owner", to: this.username, ts: now }
+              ]
+            };
+            this.$emit("transfer-updated", syntheticState);
+          } else {
+            this.$emit("notify", "Accept failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    formatDate(ts) {
+      if (!ts) return "?";
+      return new Date(ts).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    }
+  },
+
+  template: `
+    <div style="margin-top:24px;max-width:520px;margin-left:auto;margin-right:auto;">
+
+      <!-- ===== RECIPIENT VIEW: pending offer awaiting acceptance ===== -->
+      <div v-if="isPendingRecipient && pendingOffer" style="
+        padding:16px 18px;border-radius:10px;
+        background:#0d1a0d;border:1px solid #2e7d32;
+      ">
+        <div style="font-size:1rem;font-weight:bold;color:#a5d6a7;margin-bottom:8px;">
+          🤝 Ownership Transfer Offer
+        </div>
+        <p style="font-size:0.83rem;color:#888;margin:0 0 14px;line-height:1.5;">
+          @{{ pendingOffer.offeredBy || "The current owner" }} is offering to transfer
+          <strong style="color:#eee;">{{ creatureName }}</strong> to you.
+          Accepting is permanent and recorded on-chain.
+          All previous breed permits will be voided — you start fresh.
+        </p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
+          <button
+            @click="acceptOffer"
+            :disabled="publishing"
+            style="background:#1a3a1a;"
+          >
+            {{ publishing ? "Publishing…" : "✅ Accept Ownership" }}
+          </button>
+          <button
+            @click="$emit('notify', 'To decline, simply ignore the offer. The sender can cancel it at any time.', 'info')"
+            style="background:#1a1a1a;color:#888;border:1px solid #333;"
+          >
+            ℹ️ How to decline
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== OWNER VIEW ===== -->
+      <template v-if="isOwner">
+
+        <!-- Collapsed header -->
+        <div
+          @click="expanded = !expanded"
+          style="display:flex;align-items:center;justify-content:space-between;
+                 cursor:pointer;padding:10px 14px;border-radius:8px;
+                 background:#0a0a12;border:1px solid #1a1a2e;user-select:none;"
+        >
+          <span style="font-size:0.88rem;color:#80cbc4;font-weight:bold;">
+            🤝 Transfer Ownership
+            <span v-if="pendingOffer" style="font-weight:normal;color:#ffb74d;font-size:0.80rem;margin-left:8px;">
+              ⏳ offer pending → @{{ pendingOffer.to }}
+            </span>
+            <span v-else-if="hasHistory" style="font-weight:normal;color:#555;font-size:0.80rem;margin-left:8px;">
+              {{ transferHistory.length }} transfer{{ transferHistory.length === 1 ? "" : "s" }} on record
+            </span>
+            <span v-else style="font-weight:normal;color:#555;font-size:0.80rem;margin-left:8px;">
+              original owner
+            </span>
+          </span>
+          <span style="color:#444;font-size:0.78rem;">{{ expanded ? "▲ collapse" : "▼ manage" }}</span>
+        </div>
+
+        <div v-if="expanded" style="
+          border:1px solid #1a1a2e;border-top:none;border-radius:0 0 8px 8px;
+          background:#08080f;padding:14px;
+        ">
+          <p style="font-size:0.78rem;color:#555;margin:0 0 12px;line-height:1.5;">
+            Transfers are two-sided: you send an offer, the recipient must accept on-chain.
+            All breed permits are voided on transfer — the new owner starts fresh.
+            The original <code style="color:#444;">post.author</code> never changes on-chain;
+            SteemBiota derives the effective owner from the signed reply history.
+          </p>
+
+          <!-- Pending offer status -->
+          <div v-if="pendingOffer" style="
+            padding:12px;border-radius:8px;background:#1a1200;
+            border:1px solid #3a2800;margin-bottom:14px;
+          ">
+            <div style="font-size:0.80rem;color:#ffb74d;font-weight:bold;margin-bottom:6px;">
+              ⏳ Pending offer → @{{ pendingOffer.to }}
+            </div>
+            <p style="font-size:0.75rem;color:#888;margin:0 0 10px;">
+              Waiting for @{{ pendingOffer.to }} to accept on-chain.
+              You can cancel this offer at any time.
+            </p>
+            <button
+              @click="cancelOffer"
+              :disabled="publishing"
+              style="background:#1a0000;color:#ff8a80;border:1px solid #3b0000;font-size:0.78rem;"
+            >
+              {{ publishing ? "Publishing…" : "❌ Cancel Offer" }}
+            </button>
+          </div>
+
+          <!-- New offer form — only shown when no offer is pending -->
+          <template v-else>
+            <div style="font-size:0.75rem;color:#80cbc4;text-transform:uppercase;
+                        letter-spacing:0.07em;margin-bottom:8px;">Send Transfer Offer</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <input
+                v-model="recipientInput"
+                type="text"
+                placeholder="Recipient username (without @)"
+                style="font-size:13px;width:100%;"
+                @keydown.enter="sendOffer"
+              />
+              <p style="font-size:0.72rem;color:#444;margin:0;">
+                ⚠ This cannot be undone unless the recipient declines (never accepts).
+                The offer stays open until they accept or you cancel it.
+              </p>
+              <button
+                @click="sendOffer"
+                :disabled="publishing || !recipientInput.trim()"
+                style="background:#0d1a2e;"
+              >
+                {{ publishing ? "Publishing…" : "🤝 Send Offer" }}
+              </button>
+            </div>
+          </template>
+
+          <!-- Transfer history -->
+          <template v-if="hasHistory">
+            <div style="font-size:0.75rem;color:#80cbc4;text-transform:uppercase;
+                        letter-spacing:0.07em;margin:14px 0 8px;">Transfer History</div>
+            <div
+              v-for="(t, i) in transferHistory"
+              :key="i"
+              style="font-size:0.75rem;color:#555;padding:5px 0;
+                     border-bottom:1px solid #111;display:flex;gap:8px;align-items:center;"
+            >
+              <span style="color:#3a3a3a;">{{ formatDate(t.ts) }}</span>
+              <span style="color:#444;">@{{ t.from }}</span>
+              <span style="color:#2a2a2a;">→</span>
+              <span style="color:#80cbc4;">@{{ t.to }}</span>
+            </div>
+          </template>
+
+        </div>
+      </template>
+
     </div>
   `
 };

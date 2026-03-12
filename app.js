@@ -110,8 +110,12 @@ async function loadGenomeFromPost(url) {
   if (!post.author) throw new Error("Post not found: " + url);
 
   // Fetch all replies once — used for both genome fallback and permit parsing
-  const replies = await fetchAllReplies(author, permlink);
-  const permits = parseBreedPermits(replies, post.author);
+  const replies   = await fetchAllReplies(author, permlink);
+  const ownership = parseOwnershipChain(replies, post.author);
+  const permits   = parseBreedPermitsWithTransfer(
+    replies, ownership.effectiveOwner, ownership.permitsValidFrom
+  );
+  const effectiveOwner = ownership.effectiveOwner;
 
   // Try json_metadata.steembiota.genome first
   try {
@@ -120,7 +124,7 @@ async function loadGenomeFromPost(url) {
       const storedAge  = meta.steembiota.age ?? 0;
       const elapsed    = calculateAge(post.created);   // days since post was published
       const currentAge = storedAge + elapsed;
-      return { genome: meta.steembiota.genome, author, permlink, age: currentAge, permits };
+      return { genome: meta.steembiota.genome, author, permlink, age: currentAge, permits, effectiveOwner };
     }
   } catch {}
 
@@ -129,7 +133,7 @@ async function loadGenomeFromPost(url) {
   if (!match) throw new Error("No genome found in post: " + url);
   const genome = JSON.parse(match[1].trim());
   const elapsed = calculateAge(post.created);
-  return { genome, author, permlink, age: elapsed, permits };
+  return { genome, author, permlink, age: elapsed, permits, effectiveOwner };
 }
 
 // Stable string key that uniquely identifies a genome's content.
@@ -1389,7 +1393,8 @@ const CreatureView = {
     LoadingSpinnerComponent,
     ActivityPanelComponent,
     BreedingPanelComponent,
-    BreedPermitPanelComponent
+    BreedPermitPanelComponent,
+    TransferPanelComponent
   },
   data() {
     return {
@@ -1406,6 +1411,8 @@ const CreatureView = {
       alreadyFedToday: false,
       activityState: null,
       permitState:   null,   // { grantees: Set<username> } from parseBreedPermits
+      effectiveOwner: null,  // current owner (may differ from post.author after transfers)
+      transferState:  null,  // { effectiveOwner, transferHistory, pendingOffer, permitsValidFrom }
       reactionTrigger: 0,
       creatureType:  null,   // "founder" | "offspring"
       speciated:     false,  // true if offspring caused a genus split
@@ -1507,18 +1514,24 @@ const CreatureView = {
     // True if the logged-in user may use this creature as a breeding parent.
     // Owner always yes; others need an active named permit.
     isPermittedToBread() {
-      if (!this.username || !this.author) return false;
-      if (this.username === this.author) return true;
+      if (!this.username || !this.effectiveOwner) return false;
+      if (this.username === this.effectiveOwner) return true;
       if (!this.permitState) return false;
-      return isBreedingPermitted(this.author, this.username, this.permitState);
+      return isBreedingPermitted(this.effectiveOwner, this.username, this.permitState);
     },
     // Expose a sorted array of current grantees for the permit manager UI.
     currentGrantees() {
       if (!this.permitState) return [];
       return [...this.permitState.grantees].sort();
     },
+    // True if the logged-in user is the EFFECTIVE owner (may differ from post.author).
     isOwner() {
-      return !!(this.username && this.author && this.username === this.author);
+      return !!(this.username && this.effectiveOwner && this.username === this.effectiveOwner);
+    },
+    // True if a transfer offer is pending and the logged-in user is the named recipient.
+    isPendingRecipient() {
+      if (!this.username || !this.transferState?.pendingOffer) return false;
+      return this.username === this.transferState.pendingOffer.to;
     },
     lockedA() {
       if (!this.genome || !this.breedPrefilledUrl) return null;
@@ -1566,7 +1579,14 @@ const CreatureView = {
         this.feedEvents    = feedEvents;
         this.feedState     = computeFeedState(feedEvents, this.genome);
         this.activityState = computeActivityState(replies, author, this.username);
-        this.permitState   = parseBreedPermits(replies, author);
+
+        // Ownership chain — must be derived before permits (permits depend on it)
+        const ownership         = parseOwnershipChain(replies, author);
+        this.transferState      = ownership;
+        this.effectiveOwner     = ownership.effectiveOwner;
+        this.permitState        = parseBreedPermitsWithTransfer(
+          replies, ownership.effectiveOwner, ownership.permitsValidFrom
+        );
 
         // Check if logged-in user already fed today
         if (this.username) {
@@ -1744,6 +1764,16 @@ const CreatureView = {
     },
     onPermitsUpdated(newPermitState) {
       this.permitState = newPermitState;
+    },
+    onTransferUpdated(newTransferState) {
+      this.transferState  = newTransferState;
+      this.effectiveOwner = newTransferState.effectiveOwner;
+      // Void pre-transfer permits when ownership changes
+      this.permitState = parseBreedPermitsWithTransfer(
+        [],   // optimistic — full reload will reconcile on next visit
+        newTransferState.effectiveOwner,
+        newTransferState.permitsValidFrom
+      );
     },
     onActivityStateUpdated(as) { this.activityState = as; this.reactionTrigger++; },
     onFacingResolved(dir)  { this.facingRight = dir; },
@@ -1947,6 +1977,14 @@ const CreatureView = {
 
         <!-- Steem post link + copy button -->
         <div v-if="steemitUrl" style="margin:16px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
+          <!-- Effective owner indicator (shown when different from post author) -->
+          <span v-if="effectiveOwner && effectiveOwner !== author"
+            style="font-size:0.78rem;padding:2px 10px;border-radius:12px;
+                   background:#0d1a0d;border:1px solid #2e7d32;color:#66bb6a;">
+            🤝 Owned by
+            <router-link :to="'/@' + effectiveOwner"
+              style="color:#a5d6a7;font-weight:bold;">@{{ effectiveOwner }}</router-link>
+          </span>
           <a :href="steemitUrl" target="_blank" style="font-size:13px;color:#80deea;">
             📄 View on Steemit
           </a>
@@ -2040,6 +2078,25 @@ const CreatureView = {
             @notify="(msg,type) => notify(msg,type)"
             @permits-updated="onPermitsUpdated"
           ></breed-permit-panel-component>
+          <!-- Note: BreedPermitPanel publishes replies authored by username.
+               parseBreedPermitsWithTransfer already filters by effectiveOwner,
+               so permits from previous owners are automatically excluded. -->
+        </template>
+
+        <!-- Transfer Panel — shown to owner OR to pending recipient -->
+        <template v-if="(isOwner || isPendingRecipient) && !isPhantom">
+          <hr/>
+          <transfer-panel-component
+            :username="username"
+            :creature-author="author"
+            :creature-permlink="permlink"
+            :creature-name="name"
+            :transfer-state="transferState"
+            :is-owner="isOwner"
+            :is-pending-recipient="isPendingRecipient"
+            @notify="(msg,type) => notify(msg,type)"
+            @transfer-updated="onTransferUpdated"
+          ></transfer-panel-component>
         </template>
 
         <!-- Breed panel — shown while fertile AND current user is permitted -->
@@ -2059,9 +2116,9 @@ const CreatureView = {
                background:#0a0a0a;border:1px solid #333;max-width:480px;margin-left:auto;margin-right:auto;">
             <div style="font-size:0.95rem;color:#888;margin-bottom:6px;">🔒 Breeding Locked</div>
             <p style="font-size:0.82rem;color:#555;margin:0;">
-              This creature is in its fertile window, but only @{{ author }} or
+              This creature is in its fertile window, but only @{{ effectiveOwner || author }} or
               users with an active breed permit may use it as a parent.
-              Contact @{{ author }} to request a permit.
+              Contact @{{ effectiveOwner || author }} to request a permit.
             </p>
           </div>
         </template>
@@ -2512,6 +2569,7 @@ vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
 vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("BreedPermitPanelComponent",   BreedPermitPanelComponent);
+vueApp.component("TransferPanelComponent",       TransferPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("ActivityPanelComponent",      ActivityPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
