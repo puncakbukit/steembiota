@@ -796,6 +796,250 @@ function publishBreedRevoke(username, creatureAuthor, creaturePermlink, creature
 }
 
 
+// ============================================================
+// OWNERSHIP TRANSFER SYSTEM — Two-sided handshake
+//
+// Philosophy: the original post.author is the immutable on-chain author
+// forever. "Effective owner" is a derived concept tracked by SteemBiota
+// through a chain of signed transfer events in the reply tree.
+//
+// Two-step protocol:
+//   Step 1 — Current owner publishes a transfer_offer reply naming the
+//             recipient. Only one pending offer may exist at a time;
+//             publishing a new offer implicitly cancels the previous one.
+//   Step 2 — Recipient publishes a transfer_accept reply on the SAME
+//             creature post, referencing the offer permlink. Only then
+//             does effective ownership transfer.
+//
+// Cancellation: Current owner publishes transfer_cancel at any time
+//               before acceptance to withdraw the offer.
+//
+// Transfer reply shapes:
+//   transfer_offer   : { type, to, ts }
+//   transfer_accept  : { type, offer_permlink, ts }  — authored by recipient
+//   transfer_cancel  : { type, ts }                  — authored by current owner
+//
+// Rules enforced in parseOwnershipChain():
+//   1. Only the effective owner at the time of an offer may publish it.
+//   2. Only the named recipient may publish transfer_accept.
+//   3. transfer_cancel by the effective owner voids the pending offer.
+//   4. Permits granted before a completed transfer are voided — the new
+//      owner starts with a clean permit slate.
+//   5. There is no expiry on offers — they stay open until accepted or
+//      cancelled. (Owners can cancel at any time.)
+// ============================================================
+
+// Walk the reply list and derive the full ownership chain.
+// Returns:
+//   {
+//     effectiveOwner : string   — current owner username
+//     transferHistory: Array<{ from, to, ts }>  — completed transfers
+//     pendingOffer   : { to, offerPermlink, ts } | null
+//     permitsValidFrom: Date | null  — permits before this date are void
+//   }
+function parseOwnershipChain(replies, postAuthor) {
+  // Sort ascending — earliest events first
+  const sorted = [...replies].sort((a, b) =>
+    new Date(a.created) - new Date(b.created)
+  );
+
+  // Build a fast lookup: permlink → reply (for accept cross-referencing)
+  const byPermlink = {};
+  for (const r of sorted) byPermlink[r.permlink] = r;
+
+  let effectiveOwner   = postAuthor;
+  const transferHistory = [];
+  let pendingOffer      = null;   // { to, offerPermlink, offeredBy, ts }
+  let permitsValidFrom  = null;   // Date of last completed transfer
+
+  for (const reply of sorted) {
+    let meta;
+    try { meta = JSON.parse(reply.json_metadata || '{}'); } catch { continue; }
+    if (!meta.steembiota) continue;
+
+    const type   = meta.steembiota.type;
+    const author = reply.author;
+    const ts     = new Date(
+      reply.created.endsWith('Z') ? reply.created : reply.created + 'Z'
+    );
+
+    if (type === 'transfer_offer') {
+      // Only current effective owner may make an offer
+      if (author !== effectiveOwner) continue;
+      const to = meta.steembiota.to;
+      if (!to || to === effectiveOwner) continue;
+      // Publishing a new offer replaces any previous pending offer
+      pendingOffer = { to, offerPermlink: reply.permlink, offeredBy: author, ts };
+
+    } else if (type === 'transfer_cancel') {
+      // Only current effective owner may cancel
+      if (author !== effectiveOwner) continue;
+      pendingOffer = null;
+
+    } else if (type === 'transfer_accept') {
+      // Must reference a pending offer, and must be authored by the named recipient
+      if (!pendingOffer) continue;
+      const offerPermlink = meta.steembiota.offer_permlink;
+      if (offerPermlink !== pendingOffer.offerPermlink) continue;
+      if (author !== pendingOffer.to) continue;
+
+      // Transfer confirmed
+      transferHistory.push({
+        from: effectiveOwner,
+        to:   author,
+        ts
+      });
+      effectiveOwner  = author;
+      pendingOffer    = null;
+      permitsValidFrom = ts;   // all pre-transfer permits are now void
+    }
+  }
+
+  return { effectiveOwner, transferHistory, pendingOffer, permitsValidFrom };
+}
+
+// Extend parseBreedPermits to respect the permitsValidFrom timestamp.
+// Permits issued before the last ownership transfer are automatically void.
+// This shadows the original parseBreedPermits with a transfer-aware version.
+function parseBreedPermitsWithTransfer(replies, effectiveOwner, permitsValidFrom) {
+  const latestAction = new Map();
+
+  const sorted = [...replies].sort((a, b) =>
+    new Date(a.created) - new Date(b.created)
+  );
+
+  for (const reply of sorted) {
+    if (reply.author !== effectiveOwner) continue;
+
+    let meta;
+    try { meta = JSON.parse(reply.json_metadata || '{}'); } catch { continue; }
+    if (!meta.steembiota) continue;
+
+    const type    = meta.steembiota.type;
+    const grantee = meta.steembiota.grantee;
+    if ((type !== 'breed_permit' && type !== 'breed_revoke') || !grantee) continue;
+
+    const ts = new Date(
+      reply.created.endsWith('Z') ? reply.created : reply.created + 'Z'
+    );
+
+    // Void any permits/revokes that predate the last ownership transfer
+    if (permitsValidFrom && ts < permitsValidFrom) continue;
+
+    let expiry = null;
+    if (type === 'breed_permit') {
+      const days = Number(meta.steembiota.expires_days);
+      if (!isNaN(days) && days > 0) {
+        expiry = new Date(ts.getTime() + days * 86400000);
+      }
+    }
+
+    latestAction.set(grantee, { type, ts, expiry });
+  }
+
+  const now = new Date();
+  const grantees = new Set();
+  for (const [grantee, action] of latestAction) {
+    if (action.type !== 'breed_permit') continue;
+    if (action.expiry && now > action.expiry) continue;
+    grantees.add(grantee);
+  }
+
+  return { grantees };
+}
+
+// ---- Publish a transfer offer reply to the creature's post ----
+// to : string — Steem username of the intended new owner
+function publishTransferOffer(username, creatureAuthor, creaturePermlink, creatureName, to, callback) {
+  const permlink = buildPermlink('steembiota-transfer-offer-' + to.toLowerCase());
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+
+  const body =
+    `🤝 **Ownership Transfer Offer**\n\n` +
+    `@${username} is offering to transfer **${creatureName}** to @${to}.\n\n` +
+    `To accept, @${to} must publish a \`transfer_accept\` reply on the creature's post ` +
+    `referencing this offer permlink: \`${permlink}\`\n\n` +
+    `The offer can be cancelled by @${username} at any time before acceptance.\n\n` +
+    `\`\`\`\nSTEEMBIOTA_TRANSFER_OFFER\ncreature: @${creatureAuthor}/${creaturePermlink}\nto: ${to}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: 'steembiota/1.0',
+    tags: ['steembiota'],
+    steembiota: {
+      version: '1.0',
+      type: 'transfer_offer',
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      to,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, '', body,
+    creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ['steembiota'], callback);
+}
+
+// ---- Publish a transfer acceptance reply ----
+// offerPermlink : string — permlink of the transfer_offer reply being accepted
+function publishTransferAccept(username, creatureAuthor, creaturePermlink, creatureName, offerPermlink, callback) {
+  const permlink = buildPermlink('steembiota-transfer-accept');
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+
+  const body =
+    `✅ **Ownership Transfer Accepted**\n\n` +
+    `@${username} has accepted ownership of **${creatureName}**.\n\n` +
+    `\`\`\`\nSTEEMBIOTA_TRANSFER_ACCEPT\ncreature: @${creatureAuthor}/${creaturePermlink}\noffer_permlink: ${offerPermlink}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: 'steembiota/1.0',
+    tags: ['steembiota'],
+    steembiota: {
+      version: '1.0',
+      type: 'transfer_accept',
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      offer_permlink: offerPermlink,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, '', body,
+    creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ['steembiota'], callback);
+}
+
+// ---- Publish a transfer cancellation reply ----
+function publishTransferCancel(username, creatureAuthor, creaturePermlink, creatureName, callback) {
+  const permlink = buildPermlink('steembiota-transfer-cancel');
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+
+  const body =
+    `❌ **Ownership Transfer Cancelled**\n\n` +
+    `@${username} has cancelled the pending transfer offer for **${creatureName}**.\n\n` +
+    `\`\`\`\nSTEEMBIOTA_TRANSFER_CANCEL\ncreature: @${creatureAuthor}/${creaturePermlink}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: 'steembiota/1.0',
+    tags: ['steembiota'],
+    steembiota: {
+      version: '1.0',
+      type: 'transfer_cancel',
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, '', body,
+    creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ['steembiota'], callback);
+}
+
+
 //
 // Prevents inbreeding and farming by forbidding breeding between
 // creatures that are related by blood. Forbidden relationships:
