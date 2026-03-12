@@ -641,6 +641,161 @@ function publishWalk(username, creatureAuthor, creaturePermlink, creatureName, u
 }
 
 
+// ============================================================
+// BREEDING PERMIT SYSTEM
+//
+// Philosophy: opt-in permitting — creatures are CLOSED to external
+// breeding by default. The owner must explicitly grant a named permit
+// to allow another user to use their creature as a parent.
+//
+// Permit reply shape:
+//   type       : "breed_permit"
+//   grantee    : string — Steem username being permitted
+//   expires_days : number — days from permit publish date (0 = no expiry)
+//
+// Revocation reply shape:
+//   type       : "breed_revoke"
+//   grantee    : string — Steem username being revoked
+//
+// Rules (enforced in parseBreedPermits):
+//   1. Only replies authored by the creature owner are counted.
+//   2. For each grantee, the LATEST action (permit or revoke) wins.
+//   3. An expired permit is treated identically to a revocation.
+//   4. The creature owner always has implicit permission on their own creature.
+// ============================================================
+
+// Parse breed permits from a flat reply list.
+// creatureAuthor : string — the owner of the creature post
+//
+// Returns:
+//   { grantees: Set<username> }  — usernames currently holding a valid permit
+function parseBreedPermits(replies, creatureAuthor) {
+  // For each grantee, track the most recent action and its timestamp.
+  // Map<grantee, { type: "breed_permit"|"breed_revoke", ts: Date, expiry: Date|null }>
+  const latestAction = new Map();
+
+  const sorted = [...replies].sort((a, b) =>
+    new Date(a.created) - new Date(b.created)
+  );
+
+  for (const reply of sorted) {
+    // Only owner replies count
+    if (reply.author !== creatureAuthor) continue;
+
+    let meta;
+    try { meta = JSON.parse(reply.json_metadata || "{}"); } catch { continue; }
+    if (!meta.steembiota) continue;
+
+    const type    = meta.steembiota.type;
+    const grantee = meta.steembiota.grantee;
+    if ((type !== "breed_permit" && type !== "breed_revoke") || !grantee) continue;
+
+    const ts = new Date(
+      reply.created.endsWith("Z") ? reply.created : reply.created + "Z"
+    );
+
+    let expiry = null;
+    if (type === "breed_permit") {
+      const days = Number(meta.steembiota.expires_days);
+      if (!isNaN(days) && days > 0) {
+        expiry = new Date(ts.getTime() + days * 86400000);
+      }
+    }
+
+    // Last action wins — sorted ascending so each loop overwrites earlier entries
+    latestAction.set(grantee, { type, ts, expiry });
+  }
+
+  const now = new Date();
+  const grantees = new Set();
+
+  for (const [grantee, action] of latestAction) {
+    if (action.type !== "breed_permit") continue;       // revoked
+    if (action.expiry && now > action.expiry) continue; // expired
+    grantees.add(grantee);
+  }
+
+  return { grantees };
+}
+
+// Check if a user is allowed to breed a specific creature.
+// creatureAuthor : string — owner of the creature
+// breedingUser   : string — the user attempting to breed
+// permits        : result of parseBreedPermits()
+//
+// Returns true if allowed, false if not.
+function isBreedingPermitted(creatureAuthor, breedingUser, permits) {
+  if (!breedingUser) return false;
+  if (breedingUser === creatureAuthor) return true; // owner always allowed
+  return permits.grantees.has(breedingUser);
+}
+
+// Publish a breed permit reply to the creature's post.
+// grantee      : string — Steem username to permit
+// expiresDays  : number — days until expiry (0 = no expiry)
+function publishBreedPermit(username, creatureAuthor, creaturePermlink, creatureName, grantee, expiresDays, callback) {
+  const permlink = buildPermlink("steembiota-permit-" + grantee.toLowerCase());
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+  const expiryLine = (expiresDays > 0)
+    ? `Expires in **${expiresDays} day${expiresDays === 1 ? "" : "s"}** from now.`
+    : "No expiry — valid until revoked.";
+
+  const body =
+    `🔑 **Breed Permit Granted**\n\n` +
+    `@${username} has granted @${grantee} permission to use **${creatureName}** as a breeding parent.\n\n` +
+    `${expiryLine}\n\n` +
+    `\`\`\`\nSTEEMBIOTA_BREED_PERMIT\ncreature: @${creatureAuthor}/${creaturePermlink}\ngrantee: ${grantee}\nexpires_days: ${expiresDays}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota"],
+    steembiota: {
+      version: "1.0",
+      type: "breed_permit",
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      grantee,
+      expires_days: expiresDays,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, "", body,
+    creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ["steembiota"], callback);
+}
+
+// Publish a breed permit revocation reply to the creature's post.
+function publishBreedRevoke(username, creatureAuthor, creaturePermlink, creatureName, grantee, callback) {
+  const permlink = buildPermlink("steembiota-revoke-" + grantee.toLowerCase());
+  const creaturePageUrl = `${APP_URL}/#/@${creatureAuthor}/${creaturePermlink}`;
+
+  const body =
+    `🚫 **Breed Permit Revoked**\n\n` +
+    `@${username} has revoked @${grantee}'s breeding permission for **${creatureName}**.\n\n` +
+    `\`\`\`\nSTEEMBIOTA_BREED_REVOKE\ncreature: @${creatureAuthor}/${creaturePermlink}\ngrantee: ${grantee}\n\`\`\`\n\n` +
+    `🔗 [View ${creatureName} on SteemBiota](${creaturePageUrl})\n\n` +
+    `*Recorded via [SteemBiota — Immutable Evolution](${APP_URL})*`;
+
+  const jsonMetadata = {
+    app: "steembiota/1.0",
+    tags: ["steembiota"],
+    steembiota: {
+      version: "1.0",
+      type: "breed_revoke",
+      creature: { author: creatureAuthor, permlink: creaturePermlink },
+      grantee,
+      ts: new Date().toISOString()
+    }
+  };
+
+  keychainPost(username, "", body,
+    creaturePermlink, creatureAuthor,
+    jsonMetadata, permlink, ["steembiota"], callback);
+}
+
+
 //
 // Prevents inbreeding and farming by forbidding breeding between
 // creatures that are related by blood. Forbidden relationships:

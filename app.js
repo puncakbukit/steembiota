@@ -109,6 +109,10 @@ async function loadGenomeFromPost(url) {
   );
   if (!post.author) throw new Error("Post not found: " + url);
 
+  // Fetch all replies once — used for both genome fallback and permit parsing
+  const replies = await fetchAllReplies(author, permlink);
+  const permits = parseBreedPermits(replies, post.author);
+
   // Try json_metadata.steembiota.genome first
   try {
     const meta = JSON.parse(post.json_metadata || "{}");
@@ -116,7 +120,7 @@ async function loadGenomeFromPost(url) {
       const storedAge  = meta.steembiota.age ?? 0;
       const elapsed    = calculateAge(post.created);   // days since post was published
       const currentAge = storedAge + elapsed;
-      return { genome: meta.steembiota.genome, author, permlink, age: currentAge };
+      return { genome: meta.steembiota.genome, author, permlink, age: currentAge, permits };
     }
   } catch {}
 
@@ -125,7 +129,7 @@ async function loadGenomeFromPost(url) {
   if (!match) throw new Error("No genome found in post: " + url);
   const genome = JSON.parse(match[1].trim());
   const elapsed = calculateAge(post.created);
-  return { genome, author, permlink, age: elapsed };
+  return { genome, author, permlink, age: elapsed, permits };
 }
 
 // Stable string key that uniquely identifies a genome's content.
@@ -1384,7 +1388,8 @@ const CreatureView = {
     GenomeTableComponent,
     LoadingSpinnerComponent,
     ActivityPanelComponent,
-    BreedingPanelComponent
+    BreedingPanelComponent,
+    BreedPermitPanelComponent
   },
   data() {
     return {
@@ -1400,6 +1405,7 @@ const CreatureView = {
       feedEvents:    null,
       alreadyFedToday: false,
       activityState: null,
+      permitState:   null,   // { grantees: Set<username> } from parseBreedPermits
       reactionTrigger: 0,
       creatureType:  null,   // "founder" | "offspring"
       speciated:     false,  // true if offspring caused a genus split
@@ -1498,6 +1504,22 @@ const CreatureView = {
       const effEnd      = this.genome.FRT_END   + ext + boostDays;
       return this.postAge >= effStart && this.postAge < effEnd;
     },
+    // True if the logged-in user may use this creature as a breeding parent.
+    // Owner always yes; others need an active named permit.
+    isPermittedToBread() {
+      if (!this.username || !this.author) return false;
+      if (this.username === this.author) return true;
+      if (!this.permitState) return false;
+      return isBreedingPermitted(this.author, this.username, this.permitState);
+    },
+    // Expose a sorted array of current grantees for the permit manager UI.
+    currentGrantees() {
+      if (!this.permitState) return [];
+      return [...this.permitState.grantees].sort();
+    },
+    isOwner() {
+      return !!(this.username && this.author && this.username === this.author);
+    },
     lockedA() {
       if (!this.genome || !this.breedPrefilledUrl) return null;
       return {
@@ -1538,12 +1560,13 @@ const CreatureView = {
         this._postCreated  = post.created || null;   // raw timestamp for duplicate check
         this.postAge   = calculateAge(post.created);   // live age from publish timestamp
 
-        // Load feed events + activity events from replies
+        // Load feed events, activity events, and breed permits from replies
         const replies      = await fetchAllReplies(author, permlink);
         const feedEvents   = parseFeedEvents(replies, author);
         this.feedEvents    = feedEvents;
         this.feedState     = computeFeedState(feedEvents, this.genome);
         this.activityState = computeActivityState(replies, author, this.username);
+        this.permitState   = parseBreedPermits(replies, author);
 
         // Check if logged-in user already fed today
         if (this.username) {
@@ -1718,6 +1741,9 @@ const CreatureView = {
       this.feedState = fs;
       this.alreadyFedToday = true;   // panel only emits this after a successful feed
       this.reactionTrigger++;
+    },
+    onPermitsUpdated(newPermitState) {
+      this.permitState = newPermitState;
     },
     onActivityStateUpdated(as) { this.activityState = as; this.reactionTrigger++; },
     onFacingResolved(dir)  { this.facingRight = dir; },
@@ -2002,14 +2028,42 @@ const CreatureView = {
           </template>
         </div>
 
-        <!-- Breed panel — only shown while creature is fertile; Parent A locked to this creature -->
-        <template v-if="isFertile">
+        <!-- Permit Manager — owner only, always visible while creature is alive -->
+        <template v-if="isOwner && !fossil && !isPhantom">
+          <hr/>
+          <breed-permit-panel-component
+            :username="username"
+            :creature-author="author"
+            :creature-permlink="permlink"
+            :creature-name="name"
+            :current-grantees="currentGrantees"
+            @notify="(msg,type) => notify(msg,type)"
+            @permits-updated="onPermitsUpdated"
+          ></breed-permit-panel-component>
+        </template>
+
+        <!-- Breed panel — shown while fertile AND current user is permitted -->
+        <template v-if="isFertile && isPermittedToBread">
           <hr/>
           <breeding-panel-component
             :username="username"
             :locked-a="lockedA"
             @notify="(msg,type) => notify(msg,type)"
           ></breeding-panel-component>
+        </template>
+
+        <!-- Breed locked notice — fertile but user not permitted -->
+        <template v-if="isFertile && !isPermittedToBread && username && !isOwner">
+          <hr/>
+          <div style="margin-top:24px;padding:14px 16px;border-radius:8px;
+               background:#0a0a0a;border:1px solid #333;max-width:480px;margin-left:auto;margin-right:auto;">
+            <div style="font-size:0.95rem;color:#888;margin-bottom:6px;">🔒 Breeding Locked</div>
+            <p style="font-size:0.82rem;color:#555;margin:0;">
+              This creature is in its fertile window, but only @{{ author }} or
+              users with an active breed permit may use it as a parent.
+              Contact @{{ author }} to request a permit.
+            </p>
+          </div>
         </template>
 
       </template>
@@ -2457,6 +2511,7 @@ vueApp.component("LoadingSpinnerComponent",     LoadingSpinnerComponent);
 vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
 vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
+vueApp.component("BreedPermitPanelComponent",   BreedPermitPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("ActivityPanelComponent",      ActivityPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
