@@ -1472,7 +1472,9 @@ const CreatureView = {
       socialComments: [],   // non-SteemBiota replies from reply tree
       socialLoading: false, // true while fetching social data
       newComment:    "",    // comment compose box text
-      submittingComment: false
+      submittingComment: false,
+      votingInProgress:    false,  // true while keychain vote request is open
+      resteemInProgress:   false   // true while keychain resteem request is open
     };
   },
   created() {
@@ -1570,6 +1572,16 @@ const CreatureView = {
     // True if the logged-in user is the EFFECTIVE owner (may differ from post.author).
     isOwner() {
       return !!(this.username && this.effectiveOwner && this.username === this.effectiveOwner);
+    },
+    // True if the logged-in user has already upvoted this creature's post.
+    hasVoted() {
+      if (!this.username) return false;
+      return this.votes.some(v => v.voter === this.username && v.percent > 0);
+    },
+    // True if the logged-in user has already resteemed this creature's post.
+    hasResteemed() {
+      if (!this.username) return false;
+      return this.rebloggers.includes(this.username);
     },
     // True if a transfer offer is pending and the logged-in user is the named recipient.
     isPendingRecipient() {
@@ -1863,6 +1875,45 @@ const CreatureView = {
       this.socialComments = [...this.socialComments, newReply];
       this.newComment = "";
     },
+
+    submitVote() {
+      if (!this.username) { this.notify("Please log in to upvote.", "error"); return; }
+      if (!window.steem_keychain) { this.notify("Steem Keychain is not installed.", "error"); return; }
+      if (this.hasVoted) { this.notify("You have already upvoted this creature.", "error"); return; }
+      if (this.votingInProgress) return;
+      this.votingInProgress = true;
+      publishVote(this.username, this.author, this.permlink, 10000, (res) => {
+        this.votingInProgress = false;
+        if (res.success) {
+          // Optimistic: add a synthetic vote entry
+          this.votes = [...this.votes, {
+            voter: this.username, percent: 10000, weight: 1,
+            rshares: 0, reputation: 0, time: new Date().toISOString()
+          }];
+          this.notify("❤️ Upvoted!", "success");
+        } else {
+          this.notify("Upvote failed: " + (res.message || "Unknown error"), "error");
+        }
+      });
+    },
+
+    submitResteem() {
+      if (!this.username) { this.notify("Please log in to resteem.", "error"); return; }
+      if (!window.steem_keychain) { this.notify("Steem Keychain is not installed.", "error"); return; }
+      if (this.hasResteemed) { this.notify("You have already resteemed this creature.", "error"); return; }
+      if (this.resteemInProgress) return;
+      this.resteemInProgress = true;
+      publishResteem(this.username, this.author, this.permlink, (res) => {
+        this.resteemInProgress = false;
+        if (res.success) {
+          // Optimistic: add username to rebloggers
+          this.rebloggers = [...this.rebloggers, this.username];
+          this.notify("🔁 Resteemed!", "success");
+        } else {
+          this.notify("Resteem failed: " + (res.message || "Unknown error"), "error");
+        }
+      });
+    },
     copyUrl() {
       if (!this.steemitUrl) return;
       navigator.clipboard.writeText(this.steemitUrl).then(() => {
@@ -2034,14 +2085,42 @@ const CreatureView = {
             {{ { standing:'🐾 standing', sitting:'🪑 sitting', sleeping:'💤 sleeping', alert:'👀 alert', playful:'🎉 playful' }[currentPose] }}
           </div>
           <div v-else></div>
-          <!-- Upvote + Resteem counters -->
-          <div v-if="!socialLoading" style="display:flex;gap:10px;">
+          <!-- Upvote + Resteem counters + action buttons -->
+          <div v-if="!socialLoading" style="display:flex;gap:8px;align-items:center;">
+            <!-- Upvote -->
             <span style="font-size:0.75rem;color:#ef9a9a;letter-spacing:0.03em;" title="Upvotes">
               ❤️ {{ votes.length }}
             </span>
-            <span style="font-size:0.75rem;color:#80cbc4;letter-spacing:0.03em;" title="Resteems">
+            <button
+              v-if="username && !hasVoted"
+              @click="submitVote"
+              :disabled="votingInProgress"
+              title="Upvote this creature"
+              style="padding:1px 6px;font-size:0.7rem;line-height:1.4;
+                     background:#1a0a0a;border:1px solid #4a1a1a;color:#ef9a9a;
+                     border-radius:4px;cursor:pointer;min-width:0;"
+            >{{ votingInProgress ? "…" : "↑" }}</button>
+            <span
+              v-else-if="username && hasVoted"
+              title="You upvoted this"
+              style="font-size:0.7rem;color:#ef5350;">✓</span>
+            <!-- Resteem -->
+            <span style="font-size:0.75rem;color:#80cbc4;letter-spacing:0.03em;margin-left:4px;" title="Resteems">
               🔁 {{ rebloggers.length }}
             </span>
+            <button
+              v-if="username && !hasResteemed"
+              @click="submitResteem"
+              :disabled="resteemInProgress"
+              title="Resteem this creature"
+              style="padding:1px 6px;font-size:0.7rem;line-height:1.4;
+                     background:#0a1a1a;border:1px solid #1a3a3a;color:#80cbc4;
+                     border-radius:4px;cursor:pointer;min-width:0;"
+            >{{ resteemInProgress ? "…" : "↺" }}</button>
+            <span
+              v-else-if="username && hasResteemed"
+              title="You resteemed this"
+              style="font-size:0.7rem;color:#26c6da;">✓</span>
           </div>
         </div>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">

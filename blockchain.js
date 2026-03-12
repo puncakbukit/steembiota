@@ -1440,6 +1440,35 @@ function fetchUserComments(username, limit = 100) {
 
 // ---- Standard Steem social interactions ----
 
+// Upvote a post at full weight (100%).
+// weight : integer 0–10000 (10000 = 100%). Default is 10000.
+function publishVote(username, author, permlink, weight, callback) {
+  if (!window.steem_keychain) return callback({ success: false, message: "Keychain not installed." });
+  steem_keychain.requestVote(username, permlink, author, weight, (response) => {
+    callback({ success: response.success, message: response.message || response.error || "" });
+  });
+}
+
+// Resteem (reblog) a post via custom_json broadcast.
+// Uses the Steem "follow" plugin custom_json format for reblogs.
+function publishResteem(username, author, permlink, callback) {
+  if (!window.steem_keychain) return callback({ success: false, message: "Keychain not installed." });
+  const json = JSON.stringify([
+    "reblog",
+    { account: username, author, permlink }
+  ]);
+  steem_keychain.requestCustomJson(
+    username,
+    "follow",
+    "Posting",
+    json,
+    "Resteem on SteemBiota",
+    (response) => {
+      callback({ success: response.success, message: response.message || response.error || "" });
+    }
+  );
+}
+
 // Returns an array of vote objects for a post, sorted by vote weight descending.
 // Each object: { voter, percent, weight, rshares, reputation, time }
 function fetchVotes(author, permlink) {
