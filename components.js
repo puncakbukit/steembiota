@@ -2085,6 +2085,20 @@ const BreedingPanelComponent = {
         checkFertility(resA, "Parent A");
         checkFertility(resB, "Parent B");
 
+        // ---- Breed permit check ----
+        // Opt-in model: owner always allowed; others need a named active permit.
+        const checkPermit = (res, label) => {
+          if (!isBreedingPermitted(res.author, this.username, res.permits)) {
+            throw new Error(
+              `${label} (@${res.author}) requires a breed permit. ` +
+              `Only @${res.author} or users with an active permit can use this creature. ` +
+              `Contact @${res.author} to request one.`
+            );
+          }
+        };
+        checkPermit(resA, "Parent A");
+        checkPermit(resB, "Parent B");
+
         // ---- Kinship check ----
         this.loadStatus = "Checking ancestry and family relationships…";
         await checkBreedingCompatibility(resA, resB);
@@ -2292,6 +2306,213 @@ const BreedingPanelComponent = {
         </button>
       </div>
       </template>
+    </div>
+  `
+};
+
+// ============================================================
+// BreedPermitPanelComponent
+// Shown on the creature page to the creature's owner only.
+// Lets the owner grant named breed permits and revoke them.
+//
+// Props:
+//   username         — logged-in user (= owner, gate enforced by parent)
+//   creatureAuthor   — owner of the creature
+//   creaturePermlink — permlink of the creature post
+//   creatureName     — display name
+//   currentGrantees  — string[] — current active permit holders
+//
+// Emits:
+//   notify(msg, type)
+//   permits-updated(newPermitState)
+// ============================================================
+const BreedPermitPanelComponent = {
+  name: "BreedPermitPanelComponent",
+  props: {
+    username:         String,
+    creatureAuthor:   String,
+    creaturePermlink: String,
+    creatureName:     String,
+    currentGrantees:  { type: Array, default: () => [] }
+  },
+  emits: ["notify", "permits-updated"],
+  data() {
+    return {
+      expanded:     false,
+      granteeInput: "",
+      expiresDays:  0,
+      publishing:   false
+    };
+  },
+  computed: {
+    hasGrantees() { return this.currentGrantees.length > 0; }
+  },
+  methods: {
+    async grantPermit() {
+      const grantee = this.granteeInput.trim().toLowerCase();
+      if (!grantee) {
+        this.$emit("notify", "Please enter a username to grant a permit to.", "error");
+        return;
+      }
+      if (grantee === this.username) {
+        this.$emit("notify", "You already have implicit permission as the owner.", "error");
+        return;
+      }
+      if (this.currentGrantees.includes(grantee)) {
+        this.$emit("notify", `@${grantee} already has an active permit.`, "error");
+        return;
+      }
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      this.publishing = true;
+      publishBreedPermit(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        grantee,
+        Number(this.expiresDays) || 0,
+        (response) => {
+          this.publishing = false;
+          if (response.success) {
+            this.$emit("notify", `🔑 Breed permit granted to @${grantee}.`, "success");
+            this.granteeInput = "";
+            this.expiresDays  = 0;
+            // Optimistically update the permit state so the UI refreshes immediately
+            const updated = {
+              grantees: new Set([...this.currentGrantees, grantee])
+            };
+            this.$emit("permits-updated", updated);
+          } else {
+            this.$emit("notify", "Permit failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async revokePermit(grantee) {
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      this.publishing = true;
+      publishBreedRevoke(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        grantee,
+        (response) => {
+          this.publishing = false;
+          if (response.success) {
+            this.$emit("notify", `🚫 Permit revoked for @${grantee}.`, "success");
+            // Optimistically remove from permit state
+            const newSet = new Set(this.currentGrantees);
+            newSet.delete(grantee);
+            this.$emit("permits-updated", { grantees: newSet });
+          } else {
+            this.$emit("notify", "Revoke failed: " + (response.message || "Unknown error"), "error");
+          }
+        }
+      );
+    }
+  },
+
+  template: `
+    <div style="margin-top:24px;max-width:520px;margin-left:auto;margin-right:auto;">
+
+      <!-- Collapsed header --
+           Shows a summary line; clicking expands the manager. -->
+      <div
+        @click="expanded = !expanded"
+        style="display:flex;align-items:center;justify-content:space-between;
+               cursor:pointer;padding:10px 14px;border-radius:8px;
+               background:#0a0f0a;border:1px solid #1a2e1a;user-select:none;"
+      >
+        <span style="font-size:0.88rem;color:#66bb6a;font-weight:bold;">
+          🔑 Breed Permits
+          <span style="font-weight:normal;color:#555;font-size:0.80rem;margin-left:8px;">
+            {{ hasGrantees ? currentGrantees.length + ' active' : 'none granted' }}
+          </span>
+        </span>
+        <span style="color:#444;font-size:0.78rem;">{{ expanded ? '▲ collapse' : '▼ manage' }}</span>
+      </div>
+
+      <div v-if="expanded" style="
+        border:1px solid #1a2e1a;border-top:none;border-radius:0 0 8px 8px;
+        background:#080d08;padding:14px;
+      ">
+        <p style="font-size:0.78rem;color:#555;margin:0 0 12px;line-height:1.5;">
+          This creature is <strong style="color:#888;">closed to external breeding by default.</strong>
+          Grant a named permit to let another user use it as a parent.
+          Permits are recorded permanently on-chain; revocations are also on-chain.
+        </p>
+
+        <!-- Active grantees list -->
+        <div v-if="hasGrantees" style="margin-bottom:14px;">
+          <div style="font-size:0.75rem;color:#66bb6a;text-transform:uppercase;
+                      letter-spacing:0.07em;margin-bottom:6px;">Active Permits</div>
+          <div
+            v-for="g in currentGrantees"
+            :key="g"
+            style="display:flex;align-items:center;justify-content:space-between;
+                   padding:6px 10px;border-radius:6px;background:#0d1a0d;
+                   border:1px solid #1a2e1a;margin-bottom:5px;"
+          >
+            <span style="font-size:0.83rem;color:#a5d6a7;">@{{ g }}</span>
+            <button
+              @click="revokePermit(g)"
+              :disabled="publishing"
+              style="background:#1a0000;color:#ff8a80;border:1px solid #3b0000;
+                     font-size:0.72rem;padding:3px 10px;border-radius:4px;"
+            >
+              Revoke
+            </button>
+          </div>
+        </div>
+        <div v-else style="font-size:0.78rem;color:#333;margin-bottom:14px;">
+          No permits granted yet.
+        </div>
+
+        <!-- Grant new permit -->
+        <div style="font-size:0.75rem;color:#66bb6a;text-transform:uppercase;
+                    letter-spacing:0.07em;margin-bottom:8px;">Grant New Permit</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <input
+            v-model="granteeInput"
+            type="text"
+            placeholder="Steem username (without @)"
+            style="font-size:13px;width:100%;"
+            @keydown.enter="grantPermit"
+          />
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <label style="font-size:0.78rem;color:#666;white-space:nowrap;">
+              Expires in
+            </label>
+            <input
+              v-model.number="expiresDays"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="days"
+              style="font-size:13px;width:80px;text-align:center;"
+            />
+            <span style="font-size:0.78rem;color:#444;">
+              days &nbsp;(0 = no expiry)
+            </span>
+          </div>
+          <button
+            @click="grantPermit"
+            :disabled="publishing || !granteeInput.trim()"
+            style="background:#1a3a1a;"
+          >
+            {{ publishing ? "Publishing…" : "🔑 Grant Permit" }}
+          </button>
+        </div>
+
+      </div>
     </div>
   `
 };
