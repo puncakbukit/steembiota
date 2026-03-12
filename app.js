@@ -2026,9 +2026,23 @@ const CreatureView = {
           @facing-resolved="onFacingResolved"
           @pose-resolved="onPoseResolved"
         ></creature-canvas-component>
-        <div v-if="currentPose && !fossil"
-          style="font-size:0.75rem;color:#444;font-style:italic;margin:3px 0 0;letter-spacing:0.04em;">
-          {{ { standing:'🐾 standing', sitting:'🪑 sitting', sleeping:'💤 sleeping', alert:'👀 alert', playful:'🎉 playful' }[currentPose] }}
+        <!-- Pose label + social counters row -->
+        <div style="display:flex;align-items:center;justify-content:space-between;
+                    min-height:18px;margin:3px 0 0;">
+          <div v-if="currentPose && !fossil"
+            style="font-size:0.75rem;color:#444;font-style:italic;letter-spacing:0.04em;">
+            {{ { standing:'🐾 standing', sitting:'🪑 sitting', sleeping:'💤 sleeping', alert:'👀 alert', playful:'🎉 playful' }[currentPose] }}
+          </div>
+          <div v-else></div>
+          <!-- Upvote + Resteem counters -->
+          <div v-if="!socialLoading" style="display:flex;gap:10px;">
+            <span style="font-size:0.75rem;color:#ef9a9a;letter-spacing:0.03em;" title="Upvotes">
+              ❤️ {{ votes.length }}
+            </span>
+            <span style="font-size:0.75rem;color:#80cbc4;letter-spacing:0.03em;" title="Resteems">
+              🔁 {{ rebloggers.length }}
+            </span>
+          </div>
         </div>
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
           🦴 This creature has fossilised. Its genome is preserved on-chain.
