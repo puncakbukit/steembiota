@@ -1232,7 +1232,7 @@ const HomeView = {
             :key="c.author + '/' + c.permlink"
             style="position:relative;"
           >
-            <creature-card-component :post="c"></creature-card-component>
+            <creature-card-component :post="c" :username="username"></creature-card-component>
             <div
               v-if="c.effectiveOwner && c.effectiveOwner !== c.author"
               style="position:absolute;bottom:6px;left:6px;
@@ -1419,7 +1419,7 @@ const AboutView = {
 // Profile/cover images are already shown globally — not repeated here.
 const ProfileView = {
   name: "ProfileView",
-  inject: ["notify"],
+  inject: ["username", "notify"],
   components: { CreatureCardComponent, LoadingSpinnerComponent },
   data() {
     return {
@@ -1583,6 +1583,7 @@ const ProfileView = {
             v-for="c in pagedCreatures"
             :key="c.author + '/' + c.permlink"
             :post="c"
+            :username="username"
           ></creature-card-component>
         </div>
 

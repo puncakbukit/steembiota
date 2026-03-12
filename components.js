@@ -1339,12 +1339,37 @@ const CreatureCanvasComponent = {
 
 // ---- CreatureCardComponent ----
 // Compact card used in paginated creature lists (Home and Profile pages).
-// prop: post — { author, permlink, name, genome, age, lifecycleStage, created }
+// prop: post     — { author, permlink, name, genome, age, lifecycleStage, created }
+// prop: username — currently logged-in username (empty string if logged out)
 const CreatureCardComponent = {
   name: "CreatureCardComponent",
   components: { CreatureCanvasComponent },
-  props: { post: { type: Object, required: true } },
-  data() { return { copied: false }; },
+  props: {
+    post:     { type: Object, required: true },
+    username: { type: String, default: "" }
+  },
+  data() {
+    return {
+      copied:            false,
+      votes:             [],     // fetched on mount
+      rebloggers:        [],     // fetched on mount
+      socialLoading:     true,
+      votingInProgress:  false,
+      resteemInProgress: false,
+      votePickerOpen:    false,
+      votePct:           100     // chosen upvote percentage
+    };
+  },
+  mounted() {
+    // Fetch vote + reblog counts in the background — non-blocking
+    Promise.all([
+      fetchVotes(this.post.author, this.post.permlink),
+      fetchRebloggers(this.post.author, this.post.permlink)
+    ]).then(([v, r]) => {
+      this.votes      = v;
+      this.rebloggers = r;
+    }).catch(() => {}).finally(() => { this.socialLoading = false; });
+  },
   computed: {
     fossil()     { return this.post.age >= this.post.genome.LIF; },
     sexSymbol()  { return this.post.genome.SX === 0 ? "♂" : "♀"; },
@@ -1355,6 +1380,14 @@ const CreatureCardComponent = {
     },
     routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; },
     steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; },
+    hasVoted() {
+      if (!this.username) return false;
+      return this.votes.some(v => v.voter === this.username && v.percent > 0);
+    },
+    hasResteemed() {
+      if (!this.username) return false;
+      return this.rebloggers.includes(this.username);
+    },
     provenanceBadge() {
       if (this.post.isPhantom)
         return { icon: "👻", label: "Phantom", color: "#9e9e9e" };
@@ -1377,6 +1410,38 @@ const CreatureCardComponent = {
     }
   },
   methods: {
+    toggleVotePicker(e) {
+      e.preventDefault(); e.stopPropagation();
+      if (!this.username || !window.steem_keychain || this.hasVoted) return;
+      this.votePickerOpen = !this.votePickerOpen;
+    },
+    submitVote(e) {
+      e.preventDefault(); e.stopPropagation();
+      if (!this.username || !window.steem_keychain) return;
+      if (this.hasVoted || this.votingInProgress) return;
+      this.votePickerOpen  = false;
+      this.votingInProgress = true;
+      const weight = Math.round(Math.max(1, Math.min(100, this.votePct))) * 100;
+      publishVote(this.username, this.post.author, this.post.permlink, weight, (res) => {
+        this.votingInProgress = false;
+        if (res.success) {
+          this.votes = [...this.votes, {
+            voter: this.username, percent: weight, weight: 1,
+            rshares: 0, reputation: 0, time: new Date().toISOString()
+          }];
+        }
+      });
+    },
+    submitResteem(e) {
+      e.preventDefault(); e.stopPropagation();
+      if (!this.username || !window.steem_keychain) return;
+      if (this.hasResteemed || this.resteemInProgress) return;
+      this.resteemInProgress = true;
+      publishResteem(this.username, this.post.author, this.post.permlink, (res) => {
+        this.resteemInProgress = false;
+        if (res.success) this.rebloggers = [...this.rebloggers, this.username];
+      });
+    },
     copyUrl(e) {
       e.preventDefault();
       e.stopPropagation();
@@ -1402,7 +1467,7 @@ const CreatureCardComponent = {
     <router-link :to="routePath" style="text-decoration:none;color:inherit;display:block;">
       <div
         style="background:#111;border:1px solid #222;border-radius:10px;padding:10px;
-               text-align:center;cursor:pointer;transition:border-color 0.18s;"
+               text-align:center;cursor:pointer;transition:border-color 0.18s;position:relative;"
         @mouseenter="$event.currentTarget.style.borderColor='#2e7d32'"
         @mouseleave="$event.currentTarget.style.borderColor='#222'"
       >
@@ -1414,11 +1479,89 @@ const CreatureCardComponent = {
           :canvas-h="144"
           style="display:block;margin:0 auto;"
         ></creature-canvas-component>
+
+        <!-- Creature name -->
         <div style="font-size:0.82rem;font-weight:bold;color:#a5d6a7;
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:5px;">
           🧬 {{ post.name }}
         </div>
-        <div style="font-size:0.70rem;margin-top:3px;display:flex;gap:5px;justify-content:center;flex-wrap:wrap;">
+
+        <!-- Upvote row -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px;
+                    margin-top:5px;position:relative;" @click.prevent.stop>
+          <!-- Count -->
+          <span v-if="!socialLoading" style="font-size:0.72rem;color:#ef9a9a;" title="Upvotes">
+            ❤️ {{ votes.length }}
+          </span>
+          <span v-else style="font-size:0.68rem;color:#333;">❤️ …</span>
+
+          <!-- Upvote button / already-voted tick -->
+          <template v-if="username">
+            <button
+              v-if="!hasVoted"
+              @click="toggleVotePicker"
+              :disabled="votingInProgress"
+              title="Upvote this creature"
+              style="padding:1px 7px;font-size:0.68rem;line-height:1.5;
+                     background:#1a0a0a;border:1px solid #4a1a1a;color:#ef9a9a;
+                     border-radius:4px;cursor:pointer;"
+            >{{ votingInProgress ? "…" : "↑ Vote" }}</button>
+            <span v-else style="font-size:0.68rem;color:#ef5350;" title="You upvoted this">✓ Voted</span>
+          </template>
+
+          <!-- % picker popover -->
+          <div
+            v-if="votePickerOpen"
+            style="position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+                   background:#111;border:1px solid #3a1a1a;border-radius:8px;
+                   padding:10px 12px;min-width:155px;z-index:300;
+                   box-shadow:0 4px 18px rgba(0,0,0,0.8);"
+          >
+            <!-- Dismiss overlay -->
+            <div @click.stop="votePickerOpen = false"
+                 style="position:fixed;inset:0;z-index:-1;"></div>
+            <div style="font-size:0.7rem;color:#ef9a9a;font-weight:bold;
+                        text-align:center;margin-bottom:7px;">❤️ Vote strength</div>
+            <div style="text-align:center;font-size:1rem;font-weight:bold;
+                        color:#ef9a9a;margin-bottom:5px;">{{ votePct }}%</div>
+            <input type="range" v-model.number="votePct" min="1" max="100" step="1"
+                   style="width:100%;accent-color:#ef5350;cursor:pointer;" />
+            <div style="display:flex;justify-content:space-between;
+                        font-size:0.6rem;color:#444;margin-top:2px;">
+              <span>1%</span><span>100%</span>
+            </div>
+            <button
+              @click.stop="submitVote"
+              style="margin-top:7px;width:100%;background:#3a0a0a;
+                     border:1px solid #6a2020;color:#ef9a9a;font-size:0.75rem;
+                     border-radius:5px;padding:4px 0;cursor:pointer;"
+            >Confirm {{ votePct }}%</button>
+          </div>
+        </div>
+
+        <!-- Resteem row -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px;
+                    margin-top:4px;" @click.prevent.stop>
+          <span v-if="!socialLoading" style="font-size:0.72rem;color:#80cbc4;" title="Resteems">
+            🔁 {{ rebloggers.length }}
+          </span>
+          <span v-else style="font-size:0.68rem;color:#333;">🔁 …</span>
+          <template v-if="username">
+            <button
+              v-if="!hasResteemed"
+              @click="submitResteem"
+              :disabled="resteemInProgress"
+              title="Resteem this creature"
+              style="padding:1px 7px;font-size:0.68rem;line-height:1.5;
+                     background:#0a1a1a;border:1px solid #1a3a3a;color:#80cbc4;
+                     border-radius:4px;cursor:pointer;"
+            >{{ resteemInProgress ? "…" : "↺ Resteem" }}</button>
+            <span v-else style="font-size:0.68rem;color:#26c6da;" title="You resteemed this">✓ Resteemed</span>
+          </template>
+        </div>
+
+        <!-- Sex / age / lifecycle -->
+        <div style="font-size:0.70rem;margin-top:5px;display:flex;gap:5px;justify-content:center;flex-wrap:wrap;">
           <span style="color:#888;">{{ sexSymbol }}</span>
           <span style="color:#444;">·</span>
           <span style="color:#888;">{{ post.age }}d</span>
