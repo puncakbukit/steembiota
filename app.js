@@ -1474,7 +1474,9 @@ const CreatureView = {
       newComment:    "",    // comment compose box text
       submittingComment: false,
       votingInProgress:    false,  // true while keychain vote request is open
-      resteemInProgress:   false   // true while keychain resteem request is open
+      resteemInProgress:   false,  // true while keychain resteem request is open
+      votePickerOpen:      false,  // true when the % slider popover is visible
+      votePct:             100     // last chosen upvote percentage (1–100)
     };
   },
   created() {
@@ -1876,21 +1878,28 @@ const CreatureView = {
       this.newComment = "";
     },
 
-    submitVote() {
+    toggleVotePicker() {
       if (!this.username) { this.notify("Please log in to upvote.", "error"); return; }
       if (!window.steem_keychain) { this.notify("Steem Keychain is not installed.", "error"); return; }
       if (this.hasVoted) { this.notify("You have already upvoted this creature.", "error"); return; }
-      if (this.votingInProgress) return;
+      this.votePickerOpen = !this.votePickerOpen;
+    },
+
+    submitVote() {
+      if (!this.username || !window.steem_keychain) return;
+      if (this.hasVoted || this.votingInProgress) return;
+      this.votePickerOpen   = false;
       this.votingInProgress = true;
-      publishVote(this.username, this.author, this.permlink, 10000, (res) => {
+      const weight = Math.round(Math.max(1, Math.min(100, this.votePct))) * 100;
+      publishVote(this.username, this.author, this.permlink, weight, (res) => {
         this.votingInProgress = false;
         if (res.success) {
-          // Optimistic: add a synthetic vote entry
+          // Optimistic: add synthetic vote entry at the chosen percent
           this.votes = [...this.votes, {
-            voter: this.username, percent: 10000, weight: 1,
+            voter: this.username, percent: weight, weight: 1,
             rshares: 0, reputation: 0, time: new Date().toISOString()
           }];
-          this.notify("❤️ Upvoted!", "success");
+          this.notify("❤️ Upvoted at " + this.votePct + "%!", "success");
         } else {
           this.notify("Upvote failed: " + (res.message || "Unknown error"), "error");
         }
@@ -2091,15 +2100,63 @@ const CreatureView = {
             <span style="font-size:0.75rem;color:#ef9a9a;letter-spacing:0.03em;" title="Upvotes">
               ❤️ {{ votes.length }}
             </span>
-            <button
-              v-if="username && !hasVoted"
-              @click="submitVote"
-              :disabled="votingInProgress"
-              title="Upvote this creature"
-              style="padding:1px 6px;font-size:0.7rem;line-height:1.4;
-                     background:#1a0a0a;border:1px solid #4a1a1a;color:#ef9a9a;
-                     border-radius:4px;cursor:pointer;min-width:0;"
-            >{{ votingInProgress ? "…" : "↑" }}</button>
+            <!-- Upvote button + % picker popover -->
+            <div v-if="username && !hasVoted" style="position:relative;">
+              <button
+                @click="toggleVotePicker"
+                :disabled="votingInProgress"
+                title="Upvote this creature"
+                style="padding:1px 6px;font-size:0.7rem;line-height:1.4;
+                       background:#1a0a0a;border:1px solid #4a1a1a;color:#ef9a9a;
+                       border-radius:4px;cursor:pointer;min-width:0;"
+              >{{ votingInProgress ? "…" : "↑" }}</button>
+
+              <!-- Floating % picker — opens above the button -->
+              <div
+                v-if="votePickerOpen"
+                style="position:absolute;bottom:calc(100% + 6px);right:0;
+                       background:#111;border:1px solid #3a1a1a;border-radius:8px;
+                       padding:10px 12px;min-width:160px;z-index:200;
+                       box-shadow:0 4px 16px rgba(0,0,0,0.7);"
+              >
+                <!-- Close on outside click via a transparent overlay -->
+                <div
+                  @click.stop="votePickerOpen = false"
+                  style="position:fixed;inset:0;z-index:-1;"
+                ></div>
+
+                <div style="font-size:0.72rem;color:#ef9a9a;font-weight:bold;
+                            margin-bottom:8px;text-align:center;letter-spacing:0.05em;">
+                  ❤️ Upvote strength
+                </div>
+
+                <!-- Percentage display -->
+                <div style="text-align:center;font-size:1rem;font-weight:bold;
+                            color:#ef9a9a;margin-bottom:6px;">
+                  {{ votePct }}%
+                </div>
+
+                <!-- Range slider -->
+                <input
+                  type="range"
+                  v-model.number="votePct"
+                  min="1" max="100" step="1"
+                  style="width:100%;accent-color:#ef5350;cursor:pointer;"
+                />
+                <div style="display:flex;justify-content:space-between;
+                            font-size:0.62rem;color:#444;margin-top:2px;">
+                  <span>1%</span><span>100%</span>
+                </div>
+
+                <!-- Confirm button -->
+                <button
+                  @click.stop="submitVote"
+                  style="margin-top:8px;width:100%;background:#3a0a0a;
+                         border:1px solid #6a2020;color:#ef9a9a;font-size:0.78rem;
+                         border-radius:5px;padding:4px 0;cursor:pointer;"
+                >Confirm {{ votePct }}% upvote</button>
+              </div>
+            </div>
             <span
               v-else-if="username && hasVoted"
               title="You upvoted this"
