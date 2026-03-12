@@ -2816,3 +2816,283 @@ const TransferPanelComponent = {
     </div>
   `
 };
+
+// ============================================================
+// SocialPanelComponent
+// Displays standard Steem social interactions on a creature page:
+//   ❤️  Upvotes  — vote count + top voter avatars/names
+//   🔁  Resteems — resteem count + resteeming users
+//   💬  Comments — non-SteemBiota reply thread, read + write
+//
+// Sits below the Activities panel, above the Unicode render section.
+//
+// Props:
+//   username        — logged-in user (or "" if not logged in)
+//   creatureAuthor  — post author
+//   creaturePermlink — post permlink
+//   votes           — Array<{ voter, percent, weight }> from fetchVotes()
+//   rebloggers      — Array<string> usernames from fetchRebloggers()
+//   socialComments  — Array<reply> non-game top-level replies
+//   socialLoading   — boolean
+//
+// Emits:
+//   notify(msg, type)
+//   comment-posted(replyObject)  — optimistic add
+// ============================================================
+const SocialPanelComponent = {
+  name: "SocialPanelComponent",
+  props: {
+    username:         { type: String,  default: "" },
+    creatureAuthor:   { type: String,  required: true },
+    creaturePermlink: { type: String,  required: true },
+    votes:            { type: Array,   default: () => [] },
+    rebloggers:       { type: Array,   default: () => [] },
+    socialComments:   { type: Array,   default: () => [] },
+    socialLoading:    { type: Boolean, default: false }
+  },
+  emits: ["notify", "comment-posted"],
+  data() {
+    return {
+      votesExpanded:    false,
+      resteemsExpanded: false,
+      commentsExpanded: true,   // comments open by default — most engaging
+      commentText:      "",
+      submitting:       false
+    };
+  },
+  computed: {
+    voteCount()    { return this.votes.length; },
+    positiveVotes(){ return this.votes.filter(v => v.percent > 0); },
+    topVoters()    { return this.positiveVotes.slice(0, 12); },
+    resteemsCount(){ return this.rebloggers.length; },
+    commentCount() { return this.socialComments.length; }
+  },
+  methods: {
+    timeAgo(ts) {
+      const diff = (Date.now() - new Date(ts)) / 1000;
+      if (diff < 60)    return Math.round(diff) + "s";
+      if (diff < 3600)  return Math.round(diff / 60) + "m";
+      if (diff < 86400) return Math.round(diff / 3600) + "h";
+      return Math.round(diff / 86400) + "d";
+    },
+    formatBody(body) {
+      // Strip markdown image syntax and truncate for display
+      return (body || "")
+        .replace(/!\[.*?\]\(.*?\)/g, "[image]")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/[#*_`>]/g, "")
+        .trim()
+        .slice(0, 500) + (body && body.length > 500 ? "…" : "");
+    },
+    profileUrl(user) {
+      return `/#/@${user}`;
+    },
+    async submitComment() {
+      const body = this.commentText.trim();
+      if (!body) return;
+      if (!this.username) {
+        this.$emit("notify", "Please log in to comment.", "error");
+        return;
+      }
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain is not installed.", "error");
+        return;
+      }
+      if (body.length < 2) {
+        this.$emit("notify", "Comment is too short.", "error");
+        return;
+      }
+      this.submitting = true;
+      publishComment(
+        this.username,
+        body,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        (res) => {
+          this.submitting = false;
+          if (res.success) {
+            // Build an optimistic reply object matching Steem reply shape
+            const optimistic = {
+              author:           this.username,
+              permlink:         res.permlink || "pending",
+              body:             body,
+              created:          new Date().toISOString().replace("T", " ").slice(0, 19),
+              parent_author:    this.creatureAuthor,
+              parent_permlink:  this.creaturePermlink,
+              json_metadata:    "{}"
+            };
+            this.commentText = "";
+            this.$emit("comment-posted", optimistic);
+            this.$emit("notify", "💬 Comment published!", "success");
+          } else {
+            this.$emit("notify", "Comment failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    }
+  },
+
+  template: `
+    <div style="margin-top:24px;max-width:580px;margin-left:auto;margin-right:auto;">
+
+      <!-- ===== LOADING ===== -->
+      <div v-if="socialLoading" style="text-align:center;padding:12px 0;">
+        <span style="font-size:0.78rem;color:#444;">Loading social data…</span>
+      </div>
+
+      <template v-else>
+
+        <!-- ===== UPVOTES ===== -->
+        <div style="margin-bottom:10px;">
+          <div
+            @click="votesExpanded = !votesExpanded"
+            style="display:flex;align-items:center;justify-content:space-between;
+                   cursor:pointer;padding:9px 14px;border-radius:8px;
+                   background:#0a0a0a;border:1px solid #1e1e1e;user-select:none;"
+          >
+            <span style="font-size:0.85rem;color:#ef9a9a;">
+              ❤️ <strong>{{ voteCount }}</strong>
+              Upvote{{ voteCount === 1 ? "" : "s" }}
+            </span>
+            <span style="font-size:0.72rem;color:#333;">{{ votesExpanded ? "▲" : "▼" }}</span>
+          </div>
+
+          <div v-if="votesExpanded" style="
+            border:1px solid #1e1e1e;border-top:none;border-radius:0 0 8px 8px;
+            background:#080808;padding:12px 14px;
+          ">
+            <div v-if="voteCount === 0" style="font-size:0.78rem;color:#333;">
+              No upvotes yet.
+            </div>
+            <div v-else style="display:flex;flex-wrap:wrap;gap:6px;">
+              <a
+                v-for="v in topVoters"
+                :key="v.voter"
+                :href="profileUrl(v.voter)"
+                style="font-size:0.72rem;padding:2px 8px;border-radius:10px;
+                       background:#1a0a0a;border:1px solid #2e1a1a;color:#ef9a9a;
+                       text-decoration:none;"
+                :title="v.percent > 0 ? '+' + (v.percent / 100).toFixed(0) + '%' : 'downvote'"
+              >@{{ v.voter }}</a>
+              <span
+                v-if="positiveVotes.length > 12"
+                style="font-size:0.72rem;color:#444;padding:2px 6px;"
+              >+ {{ positiveVotes.length - 12 }} more</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== RESTEEMS ===== -->
+        <div style="margin-bottom:10px;">
+          <div
+            @click="resteemsExpanded = !resteemsExpanded"
+            style="display:flex;align-items:center;justify-content:space-between;
+                   cursor:pointer;padding:9px 14px;border-radius:8px;
+                   background:#0a0a0a;border:1px solid #1e1e1e;user-select:none;"
+          >
+            <span style="font-size:0.85rem;color:#80cbc4;">
+              🔁 <strong>{{ resteemsCount }}</strong>
+              Resteem{{ resteemsCount === 1 ? "" : "s" }}
+            </span>
+            <span style="font-size:0.72rem;color:#333;">{{ resteemsExpanded ? "▲" : "▼" }}</span>
+          </div>
+
+          <div v-if="resteemsExpanded" style="
+            border:1px solid #1e1e1e;border-top:none;border-radius:0 0 8px 8px;
+            background:#080808;padding:12px 14px;
+          ">
+            <div v-if="resteemsCount === 0" style="font-size:0.78rem;color:#333;">
+              No resteems yet.
+            </div>
+            <div v-else style="display:flex;flex-wrap:wrap;gap:6px;">
+              <a
+                v-for="user in rebloggers"
+                :key="user"
+                :href="profileUrl(user)"
+                style="font-size:0.72rem;padding:2px 8px;border-radius:10px;
+                       background:#0a1a1a;border:1px solid #1a2e2e;color:#80cbc4;
+                       text-decoration:none;"
+              >@{{ user }}</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== COMMENTS ===== -->
+        <div>
+          <div
+            @click="commentsExpanded = !commentsExpanded"
+            style="display:flex;align-items:center;justify-content:space-between;
+                   cursor:pointer;padding:9px 14px;border-radius:8px;
+                   background:#0a0a0a;border:1px solid #1e1e1e;user-select:none;"
+          >
+            <span style="font-size:0.85rem;color:#a5d6a7;">
+              💬 <strong>{{ commentCount }}</strong>
+              Comment{{ commentCount === 1 ? "" : "s" }}
+            </span>
+            <span style="font-size:0.72rem;color:#333;">{{ commentsExpanded ? "▲" : "▼" }}</span>
+          </div>
+
+          <div v-if="commentsExpanded" style="
+            border:1px solid #1e1e1e;border-top:none;border-radius:0 0 8px 8px;
+            background:#080808;padding:14px;
+          ">
+
+            <!-- Comment compose box -->
+            <div v-if="username" style="margin-bottom:14px;">
+              <textarea
+                v-model="commentText"
+                placeholder="Write a comment…"
+                rows="3"
+                style="width:100%;font-size:13px;background:#0f0f0f;color:#ccc;
+                       border:1px solid #2a2a2a;border-radius:6px;padding:8px;
+                       resize:vertical;font-family:inherit;box-sizing:border-box;"
+                @keydown.ctrl.enter="submitComment"
+              ></textarea>
+              <div style="display:flex;justify-content:flex-end;align-items:center;
+                           gap:10px;margin-top:6px;">
+                <span style="font-size:0.68rem;color:#333;">Ctrl+Enter to post</span>
+                <button
+                  @click="submitComment"
+                  :disabled="submitting || !commentText.trim()"
+                  style="background:#1a2a1a;font-size:0.8rem;padding:5px 14px;"
+                >{{ submitting ? "Publishing…" : "Post" }}</button>
+              </div>
+            </div>
+            <div v-else style="font-size:0.78rem;color:#444;margin-bottom:12px;">
+              Log in to leave a comment.
+            </div>
+
+            <!-- Comments list -->
+            <div v-if="commentCount === 0 && !username" style="font-size:0.78rem;color:#333;">
+              No comments yet. Be the first!
+            </div>
+            <div v-else-if="commentCount === 0" style="font-size:0.78rem;color:#333;">
+              No comments yet.
+            </div>
+
+            <div
+              v-for="(c, i) in socialComments"
+              :key="c.permlink || i"
+              style="padding:10px 0;border-bottom:1px solid #111;"
+            >
+              <!-- Author row -->
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+                <a
+                  :href="profileUrl(c.author)"
+                  style="font-size:0.82rem;font-weight:bold;color:#80cbc4;text-decoration:none;"
+                >@{{ c.author }}</a>
+                <span style="font-size:0.68rem;color:#333;">{{ timeAgo(c.created) }} ago</span>
+              </div>
+              <!-- Body -->
+              <div style="font-size:0.82rem;color:#aaa;line-height:1.5;white-space:pre-wrap;word-break:break-word;">
+                {{ formatBody(c.body) }}
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </template>
+    </div>
+  `
+};

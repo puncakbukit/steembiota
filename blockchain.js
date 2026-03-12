@@ -1438,6 +1438,51 @@ function fetchUserComments(username, limit = 100) {
   );
 }
 
+// ---- Standard Steem social interactions ----
+
+// Returns an array of vote objects for a post, sorted by vote weight descending.
+// Each object: { voter, percent, weight, rshares, reputation, time }
+function fetchVotes(author, permlink) {
+  return callWithFallbackAsync(
+    steem.api.getActiveVotes,
+    [author, permlink]
+  ).then(votes => {
+    if (!Array.isArray(votes)) return [];
+    return [...votes].sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
+  });
+}
+
+// Returns an array of usernames who have reblogged (resteemed) a post.
+function fetchRebloggers(author, permlink) {
+  return callWithFallbackAsync(
+    steem.api.getRebloggedBy,
+    [author, permlink]
+  ).then(result => {
+    if (!Array.isArray(result)) return [];
+    // getRebloggedBy includes the original author; strip them out
+    return result.filter(u => u !== author);
+  }).catch(() => []);   // getRebloggedBy may not exist on all nodes — degrade gracefully
+}
+
+// Publish a plain (non-SteemBiota) comment on a creature post.
+// The comment has no steembiota metadata so it is treated as a social comment,
+// not a game event, and will appear in the Comments section rather than
+// being parsed by parseFeedEvents / computeActivityState.
+function publishComment(username, body, parentAuthor, parentPermlink, callback) {
+  const permlink = buildPermlink('re-' + parentAuthor + '-' + parentPermlink);
+  const jsonMetadata = {
+    app: 'steembiota/1.0',
+    tags: ['steembiota']
+    // Deliberately no "steembiota" game key — keeps this a social comment only
+  };
+  keychainPost(
+    username, '', body,
+    parentPermlink, parentAuthor,
+    jsonMetadata, permlink, ['steembiota'],
+    callback
+  );
+}
+
 // ============================================================
 // NOTIFICATION SYSTEM
 //

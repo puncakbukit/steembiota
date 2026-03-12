@@ -1429,7 +1429,8 @@ const CreatureView = {
     ActivityPanelComponent,
     BreedingPanelComponent,
     BreedPermitPanelComponent,
-    TransferPanelComponent
+    TransferPanelComponent,
+    SocialPanelComponent
   },
   data() {
     return {
@@ -1464,7 +1465,14 @@ const CreatureView = {
       now:           new Date(),
       facingRight:   false,
       currentPose:   null,
-      urlCopied:     false
+      urlCopied:     false,
+      // ── Social data (votes, resteems, comments) ──
+      votes:         [],    // from fetchVotes()
+      rebloggers:    [],    // from fetchRebloggers()
+      socialComments: [],   // non-SteemBiota replies from reply tree
+      socialLoading: false, // true while fetching social data
+      newComment:    "",    // comment compose box text
+      submittingComment: false
     };
   },
   created() {
@@ -1644,10 +1652,11 @@ const CreatureView = {
       }
       this.loading = false;
 
-      // Load kinship + duplicate check in background after main render
+      // Load kinship + duplicate check + social data in background after main render
       if (!this.loadError) {
         this.loadKinship();
         this.checkDuplicate();
+        this.loadSocialData();
       }
     },
 
@@ -1813,6 +1822,47 @@ const CreatureView = {
     onActivityStateUpdated(as) { this.activityState = as; this.reactionTrigger++; },
     onFacingResolved(dir)  { this.facingRight = dir; },
     onPoseResolved(pose)   { this.currentPose = pose; },
+
+    // ── Social data ─────────────────────────────────────────
+    async loadSocialData() {
+      if (!this.author || !this.permlink) return;
+      this.socialLoading = true;
+      try {
+        const [votes, rebloggers, allReplies] = await Promise.all([
+          fetchVotes(this.author, this.permlink),
+          fetchRebloggers(this.author, this.permlink),
+          fetchAllReplies(this.author, this.permlink)
+        ]);
+        this.votes      = votes;
+        this.rebloggers = rebloggers;
+        // Social comments = top-level replies that have no steembiota game metadata
+        // (i.e. not feed/play/walk/birth/transfer/permit events)
+        this.socialComments = allReplies
+          .filter(r => {
+            // Only direct replies (depth === 1 relative to creature post)
+            // We check by comparing parent_author/parent_permlink
+            if (r.parent_author !== this.author) return false;
+            if (r.parent_permlink !== this.permlink) return false;
+            // Skip game event replies
+            let m = {};
+            try { m = JSON.parse(r.json_metadata || "{}"); } catch {}
+            if (m.steembiota && m.steembiota.type) return false;
+            // Skip empty bodies
+            if (!r.body || r.body.trim().length < 2) return false;
+            return true;
+          })
+          .sort((a, b) => new Date(a.created) - new Date(b.created));
+      } catch (e) {
+        console.warn("Social data load failed:", e);
+      }
+      this.socialLoading = false;
+    },
+
+    onCommentPosted(newReply) {
+      // Optimistically prepend the new comment to the list
+      this.socialComments = [...this.socialComments, newReply];
+      this.newComment = "";
+    },
     copyUrl() {
       if (!this.steemitUrl) return;
       navigator.clipboard.writeText(this.steemitUrl).then(() => {
@@ -1999,6 +2049,19 @@ const CreatureView = {
           @feed-state-updated="onFeedStateUpdated"
           @activity-state-updated="onActivityStateUpdated"
         ></activity-panel-component>
+
+        <!-- Social panel (upvotes, resteems, comments) — below activities -->
+        <social-panel-component
+          :username="username"
+          :creature-author="author"
+          :creature-permlink="permlink"
+          :votes="votes"
+          :rebloggers="rebloggers"
+          :social-comments="socialComments"
+          :social-loading="socialLoading"
+          @notify="(msg,type) => notify(msg,type)"
+          @comment-posted="onCommentPosted"
+        ></social-panel-component>
 
         <hr/>
 
@@ -2866,6 +2929,7 @@ vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("BreedPermitPanelComponent",   BreedPermitPanelComponent);
 vueApp.component("TransferPanelComponent",       TransferPanelComponent);
+vueApp.component("SocialPanelComponent",          SocialPanelComponent);
 vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("ActivityPanelComponent",      ActivityPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
