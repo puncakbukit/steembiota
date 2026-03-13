@@ -50,7 +50,7 @@ Each creature is defined by ten integer genes:
 | `LIF` | Lifespan in real days | 80–159 |
 | `FRT_START` | Fertility window start (days) | varies |
 | `FRT_END` | Fertility window end (days) | varies |
-| `MUT` | Mutation tendency — affects offspring variation | 0–5 |
+| `MUT` | Mutation tendency — affects offspring variation | 0–2 (founders); 0–5 (bred offspring) |
 
 The genome is stored inside every creature post in a fenced code block and in `json_metadata`, so any client can reconstruct the creature directly from the blockchain.
 
@@ -426,7 +426,7 @@ Breeding an offspring is worth **5× more XP than a founder** because it require
 
 ## Leaderboard
 
-The `/leaderboard` page ranks all known SteemBiota participants by XP. It paginates through up to 200 creature posts using cursor-based pagination (Steem's API hard-limits responses to 100 posts per call), aggregates per-user XP from all activity, and displays the top players with their level badges.
+The `/leaderboard` page ranks all known SteemBiota participants by XP. It fetches up to 200 creature posts via cursor-based pagination (Steem's API hard-limits responses to 100 posts per call), then fetches each author's recent comment history in parallel to count feed actions. All five XP sources — founders, offspring, feeds given, genera contributed, and speciation events — are included in the ranking. Each author's comments are fetched up to a limit of 100; users with more than 100 feed actions will be slightly under-counted, but this keeps leaderboard load time reasonable. The breakdown line beneath each entry shows 🌱 founders · 🐣 offspring · 🍯 feeds (if any) · 🔬 genera, and ⚡ speciation events.
 
 ---
 
