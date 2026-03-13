@@ -233,9 +233,11 @@ const USER_RANKS = [
   { minXp:    0, title: "Wanderer",     icon: "🌿" },
 ];
 
-function computeUserLevel(posts, comments) {
-  // posts = result of fetchPostsByUser (top-level posts only)
+function computeUserLevel(posts, comments, upvotedCreaturePermlinks = new Set()) {
+  // posts    = result of fetchPostsByUser (top-level posts only)
   // comments = result of fetchUserComments (replies/comments)
+  // upvotedCreaturePermlinks = Set of "author/permlink" strings for SteemBiota
+  //   creature posts the user has upvoted (positive vote only, once per creature).
   const allItems  = [...(posts || []), ...(comments || [])];
   let founders    = 0;
   let offspring   = 0;
@@ -260,12 +262,15 @@ function computeUserLevel(posts, comments) {
     }
   }
 
-  const xpFounders   = founders   * 100;
-  const xpOffspring  = offspring  * 500;
-  const xpFeeds      = feedsGiven * 10;
-  const xpGenera     = genera.size * 25;
-  const xpSpeciation = speciated   * 75;
-  const totalXp      = xpFounders + xpOffspring + xpFeeds + xpGenera + xpSpeciation;
+  const upvotesGiven = upvotedCreaturePermlinks.size;
+
+  const xpFounders   = founders     * 100;
+  const xpOffspring  = offspring    * 500;
+  const xpFeeds      = feedsGiven   * 10;
+  const xpGenera     = genera.size  * 25;
+  const xpSpeciation = speciated    * 75;
+  const xpUpvotes    = upvotesGiven * 5;
+  const totalXp      = xpFounders + xpOffspring + xpFeeds + xpGenera + xpSpeciation + xpUpvotes;
 
   const rank = USER_RANKS.find(r => totalXp >= r.minXp) || USER_RANKS[USER_RANKS.length - 1];
   const nextRank = USER_RANKS[USER_RANKS.indexOf(rank) - 1] || null;
@@ -281,7 +286,7 @@ function computeUserLevel(posts, comments) {
     nextRankIcon: nextRank ? nextRank.icon : null,
     nextRankXp: nextRank ? nextRank.minXp : null,
     progressToNext,
-    breakdown: { founders, offspring, feedsGiven, genera: genera.size, speciated }
+    breakdown: { founders, offspring, feedsGiven, upvotesGiven, genera: genera.size, speciated }
   };
 }
 
@@ -2571,9 +2576,10 @@ const CreatureView = {
 
 // Compute per-author XP from a flat array of raw Steem posts (no comments).
 // Returns an array of { author, xp, breakdown } sorted by XP descending.
-// feedsByAuthor (optional) : { [author]: feedsGiven } — feed reply counts per user,
-// fetched separately in LeaderboardView since they require per-user comment scans.
-function computeLeaderboardEntries(rawPosts, feedsByAuthor = {}) {
+// feedsByAuthor (optional)   : { [author]: feedsGiven }   — feed reply counts per user
+// upvotesByAuthor (optional) : { [author]: upvotesGiven } — distinct creature upvote counts per user
+// Both are fetched separately in LeaderboardView since they require per-user scans.
+function computeLeaderboardEntries(rawPosts, feedsByAuthor = {}, upvotesByAuthor = {}) {
   const byAuthor = {};   // author -> { founders, offspring, genera:Set, speciated }
 
   for (const p of (rawPosts || [])) {
@@ -2594,13 +2600,15 @@ function computeLeaderboardEntries(rawPosts, feedsByAuthor = {}) {
   }
 
   return Object.entries(byAuthor).map(([author, d]) => {
-    const feedsGiven = feedsByAuthor[author] || 0;
+    const feedsGiven   = feedsByAuthor[author]   || 0;
+    const upvotesGiven = upvotesByAuthor[author] || 0;
     const xp =
       d.founders   * 100 +
       d.offspring  * 500 +
       feedsGiven   * 10  +
       d.genera.size * 25 +
-      d.speciated  * 75;
+      d.speciated  * 75  +
+      upvotesGiven * 5;
     const rank = USER_RANKS.find(r => xp >= r.minXp) || USER_RANKS[USER_RANKS.length - 1];
     return {
       author,
@@ -2611,6 +2619,7 @@ function computeLeaderboardEntries(rawPosts, feedsByAuthor = {}) {
         founders:  d.founders,
         offspring: d.offspring,
         feedsGiven,
+        upvotesGiven,
         genera:    d.genera.size,
         speciated: d.speciated
       }
@@ -2651,7 +2660,7 @@ const LeaderboardView = {
         }
       }
 
-      // First pass — compute entries without feed XP to get the author list
+      // First pass — compute entries without feed/upvote XP to get the author list
       const basePassed = computeLeaderboardEntries(allRaw);
 
       if (basePassed.length === 0) {
@@ -2660,15 +2669,22 @@ const LeaderboardView = {
         return;
       }
 
-      // Fetch each author's feed replies in parallel to count feed XP.
-      // getDiscussionsByComments returns up to 100 recent comments; that is
-      // enough for the vast majority of users. Heavy feeders will be slightly
-      // under-counted if they have more than 100 feed comments, but this keeps
-      // the leaderboard load time reasonable.
-      const authors = basePassed.map(e => e.author);
-      const commentResults = await Promise.allSettled(
-        authors.map(a => fetchUserComments(a, 100))
+      // Build a Set of known SteemBiota creature permlinks from the corpus already fetched.
+      const creaturePermlinks = new Set(
+        allRaw
+          .filter(p => { try { return !!JSON.parse(p.json_metadata || "{}").steembiota; } catch { return false; } })
+          .map(p => `${p.author}/${p.permlink}`)
       );
+
+      // Fetch each author's feed replies AND account votes in parallel.
+      // Comments: up to 100 recent; voters: up to ~1000 recent votes from Steem API.
+      const authors = basePassed.map(e => e.author);
+      const [commentResults, voteResults] = await Promise.all([
+        Promise.allSettled(authors.map(a => fetchUserComments(a, 100))),
+        Promise.allSettled(authors.map(a => fetchAccountVotes(a))),
+      ]);
+
+      // Count feed replies per author
       const feedsByAuthor = {};
       commentResults.forEach((result, i) => {
         if (result.status !== "fulfilled") return;
@@ -2681,8 +2697,18 @@ const LeaderboardView = {
         if (count > 0) feedsByAuthor[authors[i]] = count;
       });
 
-      // Re-compute with feed XP included
-      const computed = computeLeaderboardEntries(allRaw, feedsByAuthor);
+      // Count distinct SteemBiota creature upvotes per author
+      const upvotesByAuthor = {};
+      voteResults.forEach((result, i) => {
+        if (result.status !== "fulfilled") return;
+        const count = (result.value || [])
+          .filter(v => creaturePermlinks.has(`${v.author}/${v.permlink}`))
+          .length;
+        if (count > 0) upvotesByAuthor[authors[i]] = count;
+      });
+
+      // Re-compute with feed and upvote XP included
+      const computed = computeLeaderboardEntries(allRaw, feedsByAuthor, upvotesByAuthor);
 
       // Batch-fetch all author profiles in one API call
       const profiles = await fetchAccountsBatch(authors);
@@ -2724,7 +2750,7 @@ const LeaderboardView = {
     <div style="margin-top:20px;padding:0 16px 40px;">
       <h2 style="color:#a5d6a7;margin:0 0 4px;font-size:1.1rem;letter-spacing:0.05em;">🏆 Leaderboard</h2>
       <p style="font-size:12px;color:#444;margin:0 0 20px;">
-        Ranked by XP from founders, offspring, feeds given, genera contributed &amp; speciation events.
+        Ranked by XP from founders, offspring, feeds given, upvotes cast, genera contributed &amp; speciation events.
       </p>
 
       <loading-spinner-component v-if="loading"></loading-spinner-component>
@@ -2810,6 +2836,9 @@ const LeaderboardView = {
                 &nbsp;·&nbsp; 🐣 {{ entry.breakdown.offspring }}
                 <template v-if="entry.breakdown.feedsGiven > 0">
                   &nbsp;·&nbsp; 🍯 {{ entry.breakdown.feedsGiven }} feeds
+                </template>
+                <template v-if="entry.breakdown.upvotesGiven > 0">
+                  &nbsp;·&nbsp; ❤️ {{ entry.breakdown.upvotesGiven }} upvotes
                 </template>
                 &nbsp;·&nbsp; 🔬 {{ entry.breakdown.genera }} genera
                 <template v-if="entry.breakdown.speciated > 0">
@@ -3092,13 +3121,52 @@ const App = {
       profileData.value = await fetchAccount(user);
       // Load level data in parallel (best-effort — failure is non-fatal)
       try {
-        const [posts, comments] = await Promise.all([
+        const [posts, comments, accountVotes] = await Promise.all([
           fetchPostsByUser(user, 100),
-          fetchUserComments(user, 100)
+          fetchUserComments(user, 100),
+          fetchAccountVotes(user)
         ]);
+
+        // Build a set of SteemBiota creature permlinks the user has upvoted.
+        // accountVotes contains { author, permlink } for every post they voted on.
+        // We cross-reference against the user's own post list plus all steembiota
+        // posts visible on the home feed to identify which are creature posts.
+        // For the profile banner we use a lightweight approach: fetch the tag corpus
+        // and mark any vote whose target has steembiota json_metadata.
+        // To keep this fast we resolve only against the already-fetched posts list
+        // (the user's own creatures) plus a shared tag corpus fetch.
+        const ownPermlinks = new Set(
+          (Array.isArray(posts) ? posts : []).map(p => `${p.author}/${p.permlink}`)
+        );
+
+        // Fetch the broader corpus of steembiota posts to resolve foreign votes
+        let corpusPermlinks = new Set();
+        try {
+          const page1 = await fetchPostsByTag("steembiota", 100);
+          const corpus = Array.isArray(page1) ? [...page1] : [];
+          if (corpus.length === 100) {
+            const last = corpus[corpus.length - 1];
+            const page2 = await fetchPostsByTagPaged("steembiota", 100, last.author, last.permlink);
+            if (Array.isArray(page2)) corpus.push(...page2.slice(1));
+          }
+          corpusPermlinks = new Set(
+            corpus
+              .filter(p => { try { return !!JSON.parse(p.json_metadata || "{}").steembiota; } catch { return false; } })
+              .map(p => `${p.author}/${p.permlink}`)
+          );
+        } catch { /* non-fatal — fall back to own posts only */ }
+
+        const allCreaturePermlinks = new Set([...ownPermlinks, ...corpusPermlinks]);
+        const upvotedCreaturePermlinks = new Set(
+          (accountVotes || [])
+            .map(v => `${v.author}/${v.permlink}`)
+            .filter(key => allCreaturePermlinks.has(key))
+        );
+
         userLevel.value = computeUserLevel(
           Array.isArray(posts)    ? posts    : [],
-          Array.isArray(comments) ? comments : []
+          Array.isArray(comments) ? comments : [],
+          upvotedCreaturePermlinks
         );
       } catch (e) {
         console.warn("Level load failed:", e);

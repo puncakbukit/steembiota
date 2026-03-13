@@ -1497,6 +1497,20 @@ function fetchVotes(author, permlink) {
   });
 }
 
+// Returns all votes cast by a user (up to the last ~1000 as enforced by the Steem API).
+// Each object: { author, permlink, weight, rshares, percent, time }
+// Used to count how many distinct SteemBiota creature posts the user has upvoted.
+function fetchAccountVotes(username) {
+  return callWithFallbackAsync(
+    steem.api.getAccountVotes,
+    [username]
+  ).then(votes => {
+    if (!Array.isArray(votes)) return [];
+    // Keep only positive votes (weight > 0); downvotes don't count.
+    return votes.filter(v => (v.weight ?? v.percent ?? 1) > 0);
+  }).catch(() => []);   // degrade gracefully if node doesn't support this call
+}
+
 // Returns an array of usernames who have reblogged (resteemed) a post.
 function fetchRebloggers(author, permlink) {
   return callWithFallbackAsync(
