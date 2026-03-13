@@ -2571,7 +2571,9 @@ const CreatureView = {
 
 // Compute per-author XP from a flat array of raw Steem posts (no comments).
 // Returns an array of { author, xp, breakdown } sorted by XP descending.
-function computeLeaderboardEntries(rawPosts) {
+// feedsByAuthor (optional) : { [author]: feedsGiven } — feed reply counts per user,
+// fetched separately in LeaderboardView since they require per-user comment scans.
+function computeLeaderboardEntries(rawPosts, feedsByAuthor = {}) {
   const byAuthor = {};   // author -> { founders, offspring, genera:Set, speciated }
 
   for (const p of (rawPosts || [])) {
@@ -2592,9 +2594,11 @@ function computeLeaderboardEntries(rawPosts) {
   }
 
   return Object.entries(byAuthor).map(([author, d]) => {
+    const feedsGiven = feedsByAuthor[author] || 0;
     const xp =
       d.founders   * 100 +
       d.offspring  * 500 +
+      feedsGiven   * 10  +
       d.genera.size * 25 +
       d.speciated  * 75;
     const rank = USER_RANKS.find(r => xp >= r.minXp) || USER_RANKS[USER_RANKS.length - 1];
@@ -2606,6 +2610,7 @@ function computeLeaderboardEntries(rawPosts) {
       breakdown: {
         founders:  d.founders,
         offspring: d.offspring,
+        feedsGiven,
         genera:    d.genera.size,
         speciated: d.speciated
       }
@@ -2646,16 +2651,40 @@ const LeaderboardView = {
         }
       }
 
-      const computed = computeLeaderboardEntries(allRaw);
+      // First pass — compute entries without feed XP to get the author list
+      const basePassed = computeLeaderboardEntries(allRaw);
 
-      if (computed.length === 0) {
+      if (basePassed.length === 0) {
         this.entries = [];
         this.loading = false;
         return;
       }
 
+      // Fetch each author's feed replies in parallel to count feed XP.
+      // getDiscussionsByComments returns up to 100 recent comments; that is
+      // enough for the vast majority of users. Heavy feeders will be slightly
+      // under-counted if they have more than 100 feed comments, but this keeps
+      // the leaderboard load time reasonable.
+      const authors = basePassed.map(e => e.author);
+      const commentResults = await Promise.allSettled(
+        authors.map(a => fetchUserComments(a, 100))
+      );
+      const feedsByAuthor = {};
+      commentResults.forEach((result, i) => {
+        if (result.status !== "fulfilled") return;
+        let count = 0;
+        for (const c of (result.value || [])) {
+          let meta = {};
+          try { meta = JSON.parse(c.json_metadata || "{}"); } catch {}
+          if (meta.steembiota?.type === "feed") count++;
+        }
+        if (count > 0) feedsByAuthor[authors[i]] = count;
+      });
+
+      // Re-compute with feed XP included
+      const computed = computeLeaderboardEntries(allRaw, feedsByAuthor);
+
       // Batch-fetch all author profiles in one API call
-      const authors  = computed.map(e => e.author);
       const profiles = await fetchAccountsBatch(authors);
 
       this.entries = computed.map(e => ({
@@ -2695,8 +2724,7 @@ const LeaderboardView = {
     <div style="margin-top:20px;padding:0 16px 40px;">
       <h2 style="color:#a5d6a7;margin:0 0 4px;font-size:1.1rem;letter-spacing:0.05em;">🏆 Leaderboard</h2>
       <p style="font-size:12px;color:#444;margin:0 0 20px;">
-        Ranked by XP from founders, offspring, genera contributed &amp; speciation events.
-        Feed XP not included (requires per-user scan).
+        Ranked by XP from founders, offspring, feeds given, genera contributed &amp; speciation events.
       </p>
 
       <loading-spinner-component v-if="loading"></loading-spinner-component>
@@ -2780,6 +2808,9 @@ const LeaderboardView = {
                 <span style="color:#66bb6a;font-weight:bold;">{{ entry.xp }} XP</span>
                 &nbsp;·&nbsp; 🌱 {{ entry.breakdown.founders }}
                 &nbsp;·&nbsp; 🐣 {{ entry.breakdown.offspring }}
+                <template v-if="entry.breakdown.feedsGiven > 0">
+                  &nbsp;·&nbsp; 🍯 {{ entry.breakdown.feedsGiven }} feeds
+                </template>
                 &nbsp;·&nbsp; 🔬 {{ entry.breakdown.genera }} genera
                 <template v-if="entry.breakdown.speciated > 0">
                   &nbsp;·&nbsp; ⚡ {{ entry.breakdown.speciated }} spec.
