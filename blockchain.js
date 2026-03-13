@@ -221,7 +221,6 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
 
   const jsonMetadata = {
     app: "steembiota/1.0",
-    tags: ["steembiota", "gaming", "evolution"],
     steembiota: {
       version: "1.0",
       genome,
@@ -232,11 +231,20 @@ function publishCreature(username, genome, unicodeArt, creatureName, age, lifecy
     }
   };
 
+  const nameParts = creatureName.split(" ");
+  const lastName  = (nameParts[0] || "").toLowerCase();
+  const firstName = (nameParts[1] || "").toLowerCase();
+  const genusTag  = (genusName || lastName).toLowerCase();
+  const sexTag    = genome.SX === 0 ? "male" : "female";
+  const tags      = [...new Set(["steembiota", "gaming", "evolution", genusTag, firstName, lastName, sexTag].filter(Boolean))];
+
+  jsonMetadata.tags = tags;
+
   keychainPost(
     username, title, body,
     "steembiota", "",
     jsonMetadata, permlink,
-    ["steembiota", "gaming", "evolution"],
+    tags,
     (response) => callback({ ...response, permlink })
   );
 }
@@ -280,7 +288,6 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
 
   const jsonMetadata = {
     app: "steembiota/1.0",
-    tags: ["steembiota", "gaming", "evolution", "breeding"],
     steembiota: {
       version: "1.0",
       genome,
@@ -295,11 +302,20 @@ function publishOffspring(username, genome, unicodeArt, creatureName, breedInfo,
     }
   };
 
+  const nameParts = creatureName.split(" ");
+  const lastName  = (nameParts[0] || "").toLowerCase();
+  const firstName = (nameParts[1] || "").toLowerCase();
+  const genusTag  = (genusName || lastName).toLowerCase();
+  const sexTag    = genome.SX === 0 ? "male" : "female";
+  const tags      = [...new Set(["steembiota", "gaming", "evolution", "breeding", genusTag, firstName, lastName, sexTag].filter(Boolean))];
+
+  jsonMetadata.tags = tags;
+
   keychainPost(
     username, title, body,
     "steembiota", "",
     jsonMetadata, permlink,
-    ["steembiota", "gaming", "evolution", "breeding"],
+    tags,
     (response) => callback({ ...response, permlink })
   );
 }
