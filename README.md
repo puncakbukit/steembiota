@@ -577,3 +577,11 @@ Open source. Community experimentation and forks are encouraged.
 ## Author
 
 Created for the Steem blockchain ecosystem by @puncakbukit.
+
+---
+
+## Assisted By
+
+* https://chatgpt.com/
+* https://claude.ai/
+
