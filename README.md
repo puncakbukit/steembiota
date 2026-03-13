@@ -407,6 +407,7 @@ Every on-chain action earns XP for the acting user. XP totals are computed clien
 | Each unique genus contributed (distinct GEN values across own creatures) | 25 |
 | Each speciation event in own offspring | 75 |
 | Feed a creature | 10 |
+| Upvote a SteemBiota creature post (once per creature) | 5 |
 
 Breeding an offspring is worth **5× more XP than a founder** because it requires two compatible, fertile, unrelated creatures to exist simultaneously — a significantly higher coordination barrier.
 
@@ -426,7 +427,7 @@ Breeding an offspring is worth **5× more XP than a founder** because it require
 
 ## Leaderboard
 
-The `/leaderboard` page ranks all known SteemBiota participants by XP. It fetches up to 200 creature posts via cursor-based pagination (Steem's API hard-limits responses to 100 posts per call), then fetches each author's recent comment history in parallel to count feed actions. All five XP sources — founders, offspring, feeds given, genera contributed, and speciation events — are included in the ranking. Each author's comments are fetched up to a limit of 100; users with more than 100 feed actions will be slightly under-counted, but this keeps leaderboard load time reasonable. The breakdown line beneath each entry shows 🌱 founders · 🐣 offspring · 🍯 feeds (if any) · 🔬 genera, and ⚡ speciation events.
+The `/leaderboard` page ranks all known SteemBiota participants by XP. It fetches up to 200 creature posts via cursor-based pagination (Steem's API hard-limits responses to 100 posts per call), then fetches each author's recent comment history and account vote history in parallel. All six XP sources — founders, offspring, feeds given, upvotes cast, genera contributed, and speciation events — are included in the ranking. Comment history is fetched up to a limit of 100; account votes up to the last ~1000 as returned by the Steem API. Very prolific feeders or voters may be slightly under-counted, but this keeps leaderboard load time reasonable. The breakdown line beneath each entry shows 🌱 founders · 🐣 offspring · 🍯 feeds (if any) · ❤️ upvotes (if any) · 🔬 genera, and ⚡ speciation events.
 
 ---
 
@@ -577,11 +578,3 @@ Open source. Community experimentation and forks are encouraged.
 ## Author
 
 Created for the Steem blockchain ecosystem by @puncakbukit.
-
----
-
-## Assisted By
-
-* https://chatgpt.com/
-* https://claude.ai/
-
