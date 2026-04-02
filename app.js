@@ -15,10 +15,6 @@ function randomInt(max) {
   return Math.floor(Math.random() * max);
 }
 
-// Generate a fresh founder genome using Math.random().
-// Founder genomes are intentionally non-deterministic — each call produces
-// a unique creature.  This is in deliberate contrast to breedGenomes(), which
-// uses a seeded PRNG so the same two parents always produce the same child.
 function generateGenome() {
   const LIF       = 80 + randomInt(80);
   const FRT_START = Math.min(20 + randomInt(20), LIF - 10);
@@ -89,14 +85,11 @@ function maybeSpeciate(rng, gen) {
 
 // Parse a Steem post URL into { author, permlink }.
 // Handles steemit.com and plain author/permlink strings.
-// NOTE: the regex is intentionally case-sensitive — Steem permlinks are
-// always lowercase and an uppercase permlink would fail at the API anyway.
-// Rejecting it here gives a clearer error to the user.
 function parseSteemUrl(url) {
   url = url.trim();
   // Match https://steemit.com/category/@author/permlink
   // or    https://steemit.com/@author/permlink
-  const m = url.match(/@([a-z0-9.-]+)\/([a-z0-9-]+)\s*$/);
+  const m = url.match(/@([a-z0-9.-]+)\/([a-z0-9-]+)\s*$/i);
   if (!m) throw new Error("Cannot parse Steem URL: " + url);
   return { author: m[1], permlink: m[2] };
 }
@@ -204,7 +197,7 @@ function parseSteembiotaPosts(rawPosts) {
       created:        p.created || ""
     });
   }
-  results.sort((a, b) => new Date(b.created) - new Date(a.created));
+  results.sort((a, b) => (b.created > a.created ? 1 : -1));
   markDuplicates(results);
   return results;
 }
@@ -319,6 +312,10 @@ function breedGenomes(a, b) {
   const mCh   = mutationChance(a, b);
   const i     = (av, bv, range, min, max) => inheritGene(rng, av, bv, mCh, range, min, max);
 
+  // Track whether any mutation fired (for UI feedback)
+  const beforeMOR = (rng() < 0.5 ? a.MOR : b.MOR); // peek — rewind not possible, so we check post-hoc below
+  void beforeMOR; // used indirectly via child fields
+
   const child = {
     GEN:       a.GEN,                                   // same genus (may speciate below)
     SX:        Math.floor(rng() * 2),                   // 50/50 sex
@@ -347,13 +344,17 @@ function breedGenomes(a, b) {
   child.GEN = maybeSpeciate(rng, child.GEN);
   const speciated = child.GEN !== originalGEN;
 
-  // Detect mutation: a gene mutated if its value differs from BOTH parents.
-  // This requires no extra RNG draws and correctly reflects the seeded sequence.
+  // Detect if any field mutated vs simple mix
+  const simpleMix = {
+    MOR: rng() < 0.5 ? a.MOR : b.MOR,
+    APP: rng() < 0.5 ? a.APP : b.APP,
+    ORN: rng() < 0.5 ? a.ORN : b.ORN,
+  };
   const mutated =
     speciated ||
-    (child.MOR !== a.MOR && child.MOR !== b.MOR) ||
-    (child.APP !== a.APP && child.APP !== b.APP) ||
-    (child.ORN !== a.ORN && child.ORN !== b.ORN);
+    Math.abs(child.MOR - simpleMix.MOR) > 0 ||
+    Math.abs(child.APP - simpleMix.APP) > 0 ||
+    Math.abs(child.ORN - simpleMix.ORN) > 0;
 
   return { child, mutated, speciated };
 }
@@ -593,11 +594,6 @@ function unicodeGridSize(pct) {
 
 // ---- Mirror a single unicode art line (reverses char order) ----
 // Used to flip the creature to face right instead of left.
-// NOTE: the spread operator correctly handles multi-byte code points
-// (emoji, CJK, etc.) but does NOT split grapheme clusters (e.g. family
-// emoji joined with ZWJ sequences like 👨‍👩‍👧).  The Unicode art palette
-// uses only single-code-point glyphs so this is safe in practice, but
-// full grapheme splitting would require the Intl.Segmenter API.
 function mirrorUnicodeLine(line) {
   // Split on grapheme boundaries as best we can in plain JS.
   // We use the spread operator which handles most multi-byte Unicode correctly.
@@ -1424,63 +1420,47 @@ const AboutView = {
 };
 
 // ---- ProfileView ----
-// Shows a user's bred creatures with paginated cards.
-// Profile/cover images are already shown globally — not repeated here.
+// Two tabs: Creatures (owned via transfer chain) and Accessories (owned via transfer chain).
 const ProfileView = {
   name: "ProfileView",
   inject: ["username", "notify"],
-  components: { CreatureCardComponent, LoadingSpinnerComponent },
+  components: { CreatureCardComponent, AccessoryCardComponent, LoadingSpinnerComponent },
   data() {
     return {
-      creatures:   [],
-      loading:     true,
-      loadError:   "",
-      listPage:    1,
-      filterGenus: "",   // "" = all, otherwise genus number as string
-      filterSex:   "",   // "" = all, "0" = male, "1" = female
-      filterAgeOp: "",   // "" = off, "<" | "=" | ">"
-      filterAgeVal: ""   // numeric string
+      activeTab:    "creatures",   // "creatures" | "accessories"
+      // Creatures tab
+      creatures:    [],
+      creaturesLoading: true,
+      creaturesError:   "",
+      crePage:      1,
+      filterGenus:  "",
+      filterSex:    "",
+      filterAgeOp:  "",
+      filterAgeVal: "",
+      // Accessories tab
+      accessories:      [],
+      accessoriesLoading: true,
+      accessoriesError:   "",
+      accPage:      1,
+      filterTemplate: "",
+      accTemplates: ACCESSORY_TEMPLATES,
     };
   },
+
   async created() {
     const user = this.$route.params.user;
-    this.loading = true;
-    try {
-      // fetchCreaturesOwnedBy resolves effectiveOwner via transfer chains,
-      // so transferred creatures appear here and disappear from old owner.
-      const owned = await fetchCreaturesOwnedBy(user, 100);
-      // Convert to the same shape parseSteembiotaPosts produces
-      this.creatures = owned.map(({ post: p, meta: sb, effectiveOwner }) => {
-        const age = calculateAge(p.created);
-        return {
-          author:           p.author,
-          permlink:         p.permlink,
-          name:             sb.name || p.author,
-          genome:           sb.genome,
-          age,
-          lifecycleStage:   getLifecycleStage(age, sb.genome),
-          type:             sb.type || "founder",
-          parentA:          sb.parentA || null,
-          parentB:          sb.parentB || null,
-          speciated:        sb.speciated || false,
-          fingerprint:      genomeFingerprint(sb.genome),
-          isDuplicate:      false,
-          isPhantom:        false,
-          originalAuthor:   null,
-          originalPermlink: null,
-          originalCreated:  null,
-          created:          p.created || "",
-          effectiveOwner
-        };
-      }).sort((a, b) => (b.created > a.created ? 1 : -1));
-    } catch (e) {
-      this.loadError = e.message || "Failed to load creatures.";
-      this.notify("Failed to load profile.", "error");
-    }
-    this.loading = false;
+    // Load both tabs in parallel — await so errors surface and Vue
+    // reactivity picks up the results correctly.
+    await Promise.all([
+      this.loadCreatures(user),
+      this.loadAccessories(user),
+    ]);
   },
+
   computed: {
-    username()   { return this.$route.params.user; },
+    profileUser()  { return this.$route.params.user; },
+
+    // ── Creatures ──
     availableGenera() {
       const set = new Set(this.creatures.map(c => c.genome.GEN));
       return [...set].sort((a, b) => a - b).map(g => ({ id: g, name: generateGenusName(g) }));
@@ -1498,111 +1478,203 @@ const ProfileView = {
         return true;
       });
     },
-    totalPages() { return Math.max(1, Math.ceil(this.filteredCreatures.length / PAGE_SIZE)); },
+    crePageCount() { return Math.max(1, Math.ceil(this.filteredCreatures.length / PAGE_SIZE)); },
     pagedCreatures() {
-      const s = (this.listPage - 1) * PAGE_SIZE;
+      const s = (this.crePage - 1) * PAGE_SIZE;
       return this.filteredCreatures.slice(s, s + PAGE_SIZE);
-    }
+    },
+
+    // ── Accessories ──
+    filteredAccessories() {
+      return this.filterTemplate
+        ? this.accessories.filter(a => a.template === this.filterTemplate)
+        : this.accessories;
+    },
+    accPageCount() { return Math.max(1, Math.ceil(this.filteredAccessories.length / PAGE_SIZE)); },
+    pagedAccessories() {
+      const s = (this.accPage - 1) * PAGE_SIZE;
+      return this.filteredAccessories.slice(s, s + PAGE_SIZE);
+    },
   },
+
   watch: {
-    filterGenus()  { this.listPage = 1; },
-    filterSex()    { this.listPage = 1; },
-    filterAgeOp()  { this.listPage = 1; },
-    filterAgeVal() { this.listPage = 1; }
+    filterGenus()    { this.crePage = 1; },
+    filterSex()      { this.crePage = 1; },
+    filterAgeOp()    { this.crePage = 1; },
+    filterAgeVal()   { this.crePage = 1; },
+    filterTemplate() { this.accPage = 1; },
   },
+
   methods: {
-    prevPage() { if (this.listPage > 1) this.listPage--; },
-    nextPage() { if (this.listPage < this.totalPages) this.listPage++; }
+    async loadCreatures(user) {
+      this.creaturesLoading = true;
+      try {
+        const owned = await fetchCreaturesOwnedBy(user, 100);
+        this.creatures = owned.map(({ post: p, meta: sb, effectiveOwner }) => {
+          const age = calculateAge(p.created);
+          return {
+            author: p.author, permlink: p.permlink,
+            name: sb.name || p.author, genome: sb.genome, age,
+            lifecycleStage: getLifecycleStage(age, sb.genome),
+            type: sb.type || "founder",
+            parentA: sb.parentA || null, parentB: sb.parentB || null,
+            speciated: sb.speciated || false,
+            fingerprint: genomeFingerprint(sb.genome),
+            isDuplicate: false, isPhantom: false,
+            originalAuthor: null, originalPermlink: null, originalCreated: null,
+            created: p.created || "", effectiveOwner,
+          };
+        }).sort((a, b) => new Date(b.created) - new Date(a.created));
+      } catch (e) {
+        this.creaturesError = e.message || "Failed to load creatures.";
+      }
+      this.creaturesLoading = false;
+    },
+
+    async loadAccessories(user) {
+      this.accessoriesLoading = true;
+      try {
+        const owned = await fetchAccessoriesOwnedBy(user, 100);
+        this.accessories = owned.sort((a, b) => new Date(b.created) - new Date(a.created));
+      } catch (e) {
+        this.accessoriesError = e.message || "Failed to load accessories.";
+      }
+      this.accessoriesLoading = false;
+    },
+
+    prevCre() { if (this.crePage > 1) this.crePage--; },
+    nextCre() { if (this.crePage < this.crePageCount) this.crePage++; },
+    prevAcc() { if (this.accPage > 1) this.accPage--; },
+    nextAcc() { if (this.accPage < this.accPageCount) this.accPage++; },
   },
+
   template: `
     <div style="margin-top:20px;padding:0 16px;">
 
-      <!-- User heading -->
-      <h2 style="color:#a5d6a7;margin:0 0 4px;">@{{ username }}</h2>
+      <h2 style="color:#a5d6a7;margin:0 0 4px;">@{{ profileUser }}</h2>
       <p style="color:#555;font-size:13px;margin:0 0 16px;">
-        Creatures owned by this user
-        <span style="color:#3a3a3a;"> (includes transfers)</span>
+        Items owned by this user <span style="color:#3a3a3a;">(includes transfers)</span>
       </p>
 
-      <loading-spinner-component v-if="loading"></loading-spinner-component>
-      <div v-else-if="loadError" style="color:#ff8a80;font-size:13px;">⚠ {{ loadError }}</div>
-      <div v-else-if="creatures.length === 0" style="color:#555;font-size:13px;">
-        No SteemBiota creatures found for @{{ username }}.
+      <!-- Tab bar -->
+      <div style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #222;">
+        <button
+          @click="activeTab='creatures'"
+          :style="{
+            padding:'8px 20px', fontSize:'13px', borderRadius:'6px 6px 0 0',
+            background: activeTab==='creatures' ? '#1a2e1a' : '#111',
+            color:      activeTab==='creatures' ? '#a5d6a7' : '#555',
+            border:     '1px solid ' + (activeTab==='creatures' ? '#2e7d32' : '#222'),
+            borderBottom: activeTab==='creatures' ? '1px solid #1a2e1a' : '1px solid #222',
+            marginBottom: '-1px'
+          }"
+        >🧬 Creatures ({{ creatures.length }})</button>
+        <button
+          @click="activeTab='accessories'"
+          :style="{
+            padding:'8px 20px', fontSize:'13px', borderRadius:'6px 6px 0 0',
+            background: activeTab==='accessories' ? '#1a0a2e' : '#111',
+            color:      activeTab==='accessories' ? '#ce93d8' : '#555',
+            border:     '1px solid ' + (activeTab==='accessories' ? '#7b1fa2' : '#222'),
+            borderBottom: activeTab==='accessories' ? '1px solid #1a0a2e' : '1px solid #222',
+            marginBottom: '-1px'
+          }"
+        >✨ Accessories ({{ accessories.length }})</button>
       </div>
 
-      <template v-else>
-        <p style="font-size:12px;color:#444;margin:0 0 12px;">
-          {{ filteredCreatures.length }}{{ filteredCreatures.length !== creatures.length ? ' of ' + creatures.length : '' }}
-          creature{{ filteredCreatures.length === 1 ? '' : 's' }}
-        </p>
-
-        <!-- Filters -->
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:14px;">
-          <select
-            v-model="filterGenus"
-            style="padding:5px 8px;font-size:13px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
-          >
-            <option value="">All genera</option>
-            <option v-for="g in availableGenera" :key="g.id" :value="String(g.id)">{{ g.name }} ({{ g.id }})</option>
-          </select>
-          <div style="display:flex;gap:4px;">
-            <button
-              @click="filterSex = ''"
-              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='' ? '#2e7d32' : '#1a1a1a', color: filterSex==='' ? '#fff' : '#888', border:'1px solid #333', borderRadius:'6px' }"
-            >All</button>
-            <button
-              @click="filterSex = '0'"
-              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='0' ? '#1565c0' : '#1a1a1a', color: filterSex==='0' ? '#90caf9' : '#888', border:'1px solid #333', borderRadius:'6px' }"
-            >♂ Male</button>
-            <button
-              @click="filterSex = '1'"
-              :style="{ padding:'4px 10px', fontSize:'12px', background: filterSex==='1' ? '#880e4f' : '#1a1a1a', color: filterSex==='1' ? '#f48fb1' : '#888', border:'1px solid #333', borderRadius:'6px' }"
-            >♀ Female</button>
-          </div>
-          <!-- Age filter -->
-          <div style="display:flex;gap:4px;align-items:center;">
-            <span style="font-size:12px;color:#555;">Age</span>
-            <button
-              v-for="op in ['<','=','>']" :key="op"
-              @click="filterAgeOp = (filterAgeOp === op ? '' : op)"
-              :style="{ padding:'4px 8px', fontSize:'12px', fontFamily:'monospace', background: filterAgeOp===op ? '#4a3000' : '#1a1a1a', color: filterAgeOp===op ? '#ffb74d' : '#888', border:'1px solid #333', borderRadius:'6px' }"
-            >{{ op }}</button>
-            <input
-              v-model="filterAgeVal"
-              type="number"
-              min="0"
-              placeholder="days"
-              style="width:64px;padding:4px 6px;font-size:12px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"
-            />
-            <button
-              v-if="filterAgeOp || filterAgeVal"
-              @click="filterAgeOp=''; filterAgeVal=''"
-              style="padding:4px 7px;font-size:11px;background:#1a1a1a;color:#555;border:1px solid #333;border-radius:6px;"
-              title="Clear age filter"
-            >✕</button>
-          </div>
-        </div>
-
-        <div v-if="filteredCreatures.length === 0" style="color:#555;font-size:13px;margin:12px 0;">
-          No creatures match the current filter.
+      <!-- ═══ CREATURES TAB ═══ -->
+      <div v-if="activeTab==='creatures'">
+        <loading-spinner-component v-if="creaturesLoading"></loading-spinner-component>
+        <div v-else-if="creaturesError" style="color:#ff8a80;font-size:13px;">⚠ {{ creaturesError }}</div>
+        <div v-else-if="creatures.length===0" style="color:#555;font-size:13px;">
+          No creatures found for @{{ profileUser }}.
         </div>
         <template v-else>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
-          <creature-card-component
-            v-for="c in pagedCreatures"
-            :key="c.author + '/' + c.permlink"
-            :post="c"
-            :username="username"
-          ></creature-card-component>
-        </div>
+          <p style="font-size:12px;color:#444;margin:0 0 12px;">
+            {{ filteredCreatures.length }}{{ filteredCreatures.length !== creatures.length ? ' of ' + creatures.length : '' }}
+            creature{{ filteredCreatures.length === 1 ? '' : 's' }}
+          </p>
 
-        <div v-if="totalPages > 1" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:14px;">
-          <button @click="prevPage" :disabled="listPage === 1" style="padding:5px 14px;background:#1a2a1a;">◀ Prev</button>
-          <span style="font-size:13px;color:#555;">{{ listPage }} / {{ totalPages }}</span>
-          <button @click="nextPage" :disabled="listPage === totalPages" style="padding:5px 14px;background:#1a2a1a;">Next ▶</button>
-        </div>
+          <!-- Creature filters -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:14px;">
+            <select v-model="filterGenus"
+              style="padding:5px 8px;font-size:13px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;">
+              <option value="">All genera</option>
+              <option v-for="g in availableGenera" :key="g.id" :value="String(g.id)">{{ g.name }} ({{ g.id }})</option>
+            </select>
+            <div style="display:flex;gap:4px;">
+              <button @click="filterSex=''"
+                :style="{padding:'4px 10px',fontSize:'12px',background:filterSex===''?'#2e7d32':'#1a1a1a',color:filterSex===''?'#fff':'#888',border:'1px solid #333',borderRadius:'6px'}">All</button>
+              <button @click="filterSex='0'"
+                :style="{padding:'4px 10px',fontSize:'12px',background:filterSex==='0'?'#1565c0':'#1a1a1a',color:filterSex==='0'?'#90caf9':'#888',border:'1px solid #333',borderRadius:'6px'}">♂ Male</button>
+              <button @click="filterSex='1'"
+                :style="{padding:'4px 10px',fontSize:'12px',background:filterSex==='1'?'#880e4f':'#1a1a1a',color:filterSex==='1'?'#f48fb1':'#888',border:'1px solid #333',borderRadius:'6px'}">♀ Female</button>
+            </div>
+            <div style="display:flex;gap:4px;align-items:center;">
+              <span style="font-size:12px;color:#555;">Age</span>
+              <button v-for="op in ['<','=','>']" :key="op"
+                @click="filterAgeOp=(filterAgeOp===op?'':op)"
+                :style="{padding:'4px 8px',fontSize:'12px',fontFamily:'monospace',background:filterAgeOp===op?'#4a3000':'#1a1a1a',color:filterAgeOp===op?'#ffb74d':'#888',border:'1px solid #333',borderRadius:'6px'}">{{ op }}</button>
+              <input v-model="filterAgeVal" type="number" min="0" placeholder="days"
+                style="width:64px;padding:4px 6px;font-size:12px;background:#1a1a1a;color:#ccc;border:1px solid #333;border-radius:6px;font-family:monospace;"/>
+              <button v-if="filterAgeOp||filterAgeVal" @click="filterAgeOp='';filterAgeVal=''"
+                style="padding:4px 7px;font-size:11px;background:#1a1a1a;color:#555;border:1px solid #333;border-radius:6px;" title="Clear">✕</button>
+            </div>
+          </div>
+
+          <div v-if="filteredCreatures.length===0" style="color:#555;font-size:13px;margin:12px 0;">No creatures match the filter.</div>
+          <template v-else>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
+              <creature-card-component v-for="c in pagedCreatures" :key="c.author+'/'+c.permlink"
+                :post="c" :username="profileUser"></creature-card-component>
+            </div>
+            <div v-if="crePageCount>1" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:14px;">
+              <button @click="prevCre" :disabled="crePage===1" style="padding:5px 14px;background:#1a2a1a;">◀ Prev</button>
+              <span style="font-size:13px;color:#555;">{{ crePage }} / {{ crePageCount }}</span>
+              <button @click="nextCre" :disabled="crePage===crePageCount" style="padding:5px 14px;background:#1a2a1a;">Next ▶</button>
+            </div>
+          </template>
         </template>
-      </template>
+      </div>
+
+      <!-- ═══ ACCESSORIES TAB ═══ -->
+      <div v-if="activeTab==='accessories'">
+        <loading-spinner-component v-if="accessoriesLoading"></loading-spinner-component>
+        <div v-else-if="accessoriesError" style="color:#ff8a80;font-size:13px;">⚠ {{ accessoriesError }}</div>
+        <div v-else-if="accessories.length===0" style="color:#555;font-size:13px;">
+          No accessories found for @{{ profileUser }}.
+        </div>
+        <template v-else>
+          <p style="font-size:12px;color:#444;margin:0 0 12px;">
+            {{ filteredAccessories.length }}{{ filteredAccessories.length !== accessories.length ? ' of ' + accessories.length : '' }}
+            accessor{{ filteredAccessories.length === 1 ? 'y' : 'ies' }}
+          </p>
+
+          <!-- Accessory template filter -->
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:14px;">
+            <button @click="filterTemplate=''"
+              :style="{padding:'4px 10px',fontSize:'12px',background:filterTemplate===''?'#4a148c':'#1a1a1a',color:filterTemplate===''?'#ce93d8':'#888',border:'1px solid '+(filterTemplate===''?'#7b1fa2':'#333'),borderRadius:'6px'}">All</button>
+            <button v-for="t in accTemplates" :key="t.id"
+              @click="filterTemplate=(filterTemplate===t.id?'':t.id)"
+              :style="{padding:'4px 10px',fontSize:'12px',background:filterTemplate===t.id?'#4a148c':'#1a1a1a',color:filterTemplate===t.id?'#ce93d8':'#888',border:'1px solid '+(filterTemplate===t.id?'#7b1fa2':'#333'),borderRadius:'6px'}">
+              {{ t.icon }} {{ t.label }}
+            </button>
+          </div>
+
+          <div v-if="filteredAccessories.length===0" style="color:#555;font-size:13px;margin:12px 0;">No accessories match the filter.</div>
+          <template v-else>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:12px;max-width:920px;margin:0 auto;">
+              <accessory-card-component v-for="a in pagedAccessories" :key="a.author+'/'+a.permlink"
+                :post="a" :username="profileUser"></accessory-card-component>
+            </div>
+            <div v-if="accPageCount>1" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:14px;">
+              <button @click="prevAcc" :disabled="accPage===1" style="padding:5px 14px;background:#1a0a2e;">◀ Prev</button>
+              <span style="font-size:13px;color:#555;">{{ accPage }} / {{ accPageCount }}</span>
+              <button @click="nextAcc" :disabled="accPage===accPageCount" style="padding:5px 14px;background:#1a0a2e;">Next ▶</button>
+            </div>
+          </template>
+        </template>
+      </div>
 
     </div>
   `
@@ -1815,6 +1887,12 @@ const CreatureView = {
         let meta = {};
         try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
         if (!meta.steembiota) throw new Error("This post is not a SteemBiota creature.");
+
+        // Accessory posts share the same /@author/permlink route — hand off to AccessoryItemView
+        if (meta.steembiota.type === "accessory") {
+          this.$router.replace({ name: "AccessoryItemView", params: this.$route.params });
+          return;
+        }
 
         const sb       = meta.steembiota;
         this.genome        = sb.genome;
@@ -3076,11 +3154,13 @@ const NotificationsView = {
 
 
 const routes = [
-  { path: "/",                    component: HomeView          },
-  { path: "/about",               component: AboutView         },
-  { path: "/leaderboard",         component: LeaderboardView   },
-  { path: "/notifications",       component: NotificationsView },
-  { path: "/@:author/:permlink",  component: CreatureView      },
+  { path: "/",                                      component: HomeView          },
+  { path: "/accessories",                           component: AccessoriesView   },
+  { path: "/about",                                 component: AboutView         },
+  { path: "/leaderboard",                           component: LeaderboardView   },
+  { path: "/notifications",                         component: NotificationsView },
+  { path: "/@:author/:permlink",  name: "CreatureView",     component: CreatureView      },
+  { path: "/acc/@:author/:permlink", name: "AccessoryItemView", component: AccessoryItemView },
   { path: "/@:user",              component: ProfileView       },
 ];
 
@@ -3105,15 +3185,6 @@ const App = {
   },
 
   setup() {
-    // Restore the last-logged-in username from localStorage.
-    // TRUST MODEL: we persist only the username string, not any key material.
-    // The session is considered "cosmetically authenticated" — the profile and
-    // notification badge are loaded immediately, but every write action
-    // (publish, feed, vote, transfer, …) requires a fresh Keychain signature,
-    // so an attacker who clears Keychain but leaves localStorage intact cannot
-    // perform any on-chain action.  Users who log out of Keychain but forget
-    // to click Logout here will see a stale authenticated-looking UI until
-    // their next write attempt is rejected by Keychain.
     const username      = ref(localStorage.getItem("steem_user") || "");
     const hasKeychain   = ref(false);
     const keychainReady = ref(false);
@@ -3188,12 +3259,10 @@ const App = {
     }
 
     // ── Notification badge — count of pending transfer offers ──
-    // Polled on login + every 15 minutes.  The underlying scan
-    // (fetchNotificationsForUser) can touch many RPC calls; a shorter
-    // interval would be abusive to free public nodes.
+    // Polled on login + every 5 minutes. Lightweight: only fetches the
+    // user's own creature posts then scans their replies for pending offers.
     const notifBadgeCount = ref(0);
     let _notifPollTimer = null;
-    const NOTIF_POLL_MS = 15 * 60 * 1000;  // 15 minutes
 
     async function refreshNotifBadge(user) {
       if (!user) { notifBadgeCount.value = 0; return; }
@@ -3217,7 +3286,7 @@ const App = {
       // Start notification badge polling if already logged in
       if (username.value) {
         refreshNotifBadge(username.value);
-        _notifPollTimer = setInterval(() => refreshNotifBadge(username.value), NOTIF_POLL_MS);
+        _notifPollTimer = setInterval(() => refreshNotifBadge(username.value), 5 * 60 * 1000);
       }
       let attempts = 0;
       const interval = setInterval(() => {
@@ -3259,7 +3328,7 @@ const App = {
         // Start notification badge polling on login
         refreshNotifBadge(user);
         if (_notifPollTimer) clearInterval(_notifPollTimer);
-        _notifPollTimer = setInterval(() => refreshNotifBadge(user), NOTIF_POLL_MS);
+        _notifPollTimer = setInterval(() => refreshNotifBadge(user), 5 * 60 * 1000);
       });
     }
 
@@ -3292,6 +3361,7 @@ const App = {
     <!-- Navigation -->
     <nav>
       <router-link to="/"            exact-active-class="nav-active">Home</router-link>
+      <router-link to="/accessories" exact-active-class="nav-active">✨ Accessories</router-link>
       <router-link
         v-if="username"
         :to="'/@' + username"
@@ -3375,6 +3445,9 @@ vueApp.component("AuthComponent",               AuthComponent);
 vueApp.component("UserProfileComponent",        UserProfileComponent);
 vueApp.component("LoadingSpinnerComponent",     LoadingSpinnerComponent);
 vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
+vueApp.component("AccessoryCanvasComponent",    AccessoryCanvasComponent);
+vueApp.component("AccessoryCardComponent",      AccessoryCardComponent);
+vueApp.component("AccessoryItemView",           AccessoryItemView);
 vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);
 vueApp.component("BreedPermitPanelComponent",   BreedPermitPanelComponent);
