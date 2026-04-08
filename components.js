@@ -182,7 +182,9 @@ const CreatureCanvasComponent = {
     activityState:   { type: Object,  default: null  },
     reactionTrigger: { type: Number,  default: 0     },
     canvasW:         { type: Number,  default: 400   },
-    canvasH:         { type: Number,  default: 320   }
+    canvasH:         { type: Number,  default: 320   },
+    // Accessory being worn — { template, genome } or null
+    wearing:         { type: Object,  default: null  },
   },
   emits: ["facing-resolved", "pose-resolved", "clicked"],
   data() {
@@ -244,6 +246,7 @@ const CreatureCanvasComponent = {
     },
     feedState()        { this.$nextTick(() => this.draw()); },
     activityState()    { this.$nextTick(() => this.draw()); },
+    wearing()          { this.$nextTick(() => this.draw()); },
     reactionTrigger(v) { if (v > 0) this._startReaction(); }
   },
   mounted() {
@@ -826,6 +829,258 @@ const CreatureCanvasComponent = {
         ctx.fill(); ctx.stroke();
       }
       ctx.globalAlpha = 1;
+    },
+
+    // ----------------------------------------------------------
+    // Direct "worn hat" renderer for creature heads.
+    // We intentionally draw this in creature-local coordinates so
+    // the hat reads as an actual wearable silhouette (visible brim
+    // + crown) instead of relying on downscaled accessory thumbnails.
+    // ----------------------------------------------------------
+    _drawWornHat(ctx, headX, headY, hR, ag) {
+      const hue = ag.CLR ?? 30;
+      const sat = ag.SAT ?? 65;
+      const lit = ag.LIT ?? 45;
+      const sz  = (ag.SZ ?? 70) / 100;
+
+      // Deterministic shape variation from accessory genes (no Math.random).
+      const crownLean = (((ag.VAR ?? 0) % 21) - 10) / 100;       // -0.10..0.10
+      const taper     = 0.70 + (((ag.STR ?? 0) % 18) / 100);     // 0.70..0.87
+      const bandHue   = (hue + 25 + ((ag.ACC ?? 0) % 60)) % 360;
+
+      const brimRx = hR * (0.98 + sz * 0.34);
+      const brimRy = hR * (0.22 + sz * 0.07);
+      const brimY  = headY - hR * (0.86 + sz * 0.03);
+
+      const crownH   = hR * (0.95 + sz * 0.36);
+      const crownBot = brimY - brimRy * 0.18;
+      const crownTop = crownBot - crownH;
+      const crownRxB = brimRx * 0.62;
+      const crownRxT = crownRxB * taper;
+
+      // Brim
+      const brimGr = this.linGrad(ctx, headX, brimY - brimRy, headX, brimY + brimRy, [
+        [0,   this.hsl(hue, sat, lit + 10)],
+        [0.5, this.hsl(hue, sat, lit + 1)],
+        [1,   this.hsl(hue, sat, lit - 14)],
+      ]);
+      ctx.fillStyle = brimGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 20);
+      ctx.lineWidth = Math.max(1, hR * 0.05);
+      ctx.beginPath();
+      ctx.ellipse(headX, brimY, brimRx, brimRy, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // Crown
+      const crownGr = this.linGrad(ctx, headX - crownRxB, crownTop, headX + crownRxB, crownBot, [
+        [0, this.hsl(hue, sat, lit + 6)],
+        [1, this.hsl(hue, sat, lit - 16)],
+      ]);
+      ctx.fillStyle = crownGr;
+      ctx.strokeStyle = this.hsl(hue, sat, lit - 24);
+      ctx.lineWidth = Math.max(1, hR * 0.045);
+      ctx.beginPath();
+      ctx.moveTo(headX - crownRxT + crownLean * hR, crownTop);
+      ctx.bezierCurveTo(
+        headX - crownRxB * 0.95 + crownLean * hR, crownTop + crownH * 0.28,
+        headX - crownRxB, crownBot - brimRy * 0.25,
+        headX - crownRxB, crownBot
+      );
+      ctx.lineTo(headX + crownRxB, crownBot);
+      ctx.bezierCurveTo(
+        headX + crownRxB, crownBot - brimRy * 0.25,
+        headX + crownRxB * 0.95 + crownLean * hR, crownTop + crownH * 0.28,
+        headX + crownRxT + crownLean * hR, crownTop
+      );
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+
+      // Top cap
+      ctx.fillStyle = this.hsl(hue, sat - 6, lit + 8);
+      ctx.beginPath();
+      ctx.ellipse(headX + crownLean * hR, crownTop, crownRxT, brimRy * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Band
+      const bandH = Math.max(2, hR * 0.16);
+      const bandY = crownBot - bandH;
+      ctx.fillStyle = this.hsl(bandHue, Math.min(100, sat + 12), lit - 4);
+      ctx.strokeStyle = this.hsl(bandHue, sat, lit - 24);
+      ctx.lineWidth = Math.max(0.8, hR * 0.03);
+      ctx.beginPath();
+      ctx.moveTo(headX - crownRxB, crownBot);
+      ctx.lineTo(headX - crownRxB, bandY);
+      ctx.quadraticCurveTo(headX, bandY - hR * 0.06, headX + crownRxB, bandY);
+      ctx.lineTo(headX + crownRxB, crownBot);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    },
+
+    _redrawNeckForeground(ctx, p, sc, ox, oy, pt) {
+      const hue = p.finalHue;
+      const sat = p.colorSat;
+      const lit = p.colorLight;
+      const H1 = this.hsl;
+
+      const headX = ox - p.bodyLen * sc * 0.68 + pt.headDX;
+      const headY = oy - p.bodyH  * sc * 0.35  + pt.headDY;
+      const neckCtrlY = oy - p.bodyH * sc * (0.2 - pt.neckAngle * 0.35);
+      const neckGr = this.linGrad(ctx,
+        ox - p.bodyLen * sc * 0.5, oy - p.bodyH * sc * 0.1,
+        headX, headY + p.headSize * sc * 0.4,
+        [[0, H1(hue, sat - 5, lit - 5)], [1, H1(hue, sat, lit)]]
+      );
+      ctx.fillStyle   = neckGr;
+      ctx.strokeStyle = H1(hue, sat, lit - 18);
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(ox - p.bodyLen * sc * 0.42, oy - p.bodyH * sc * 0.5);
+      ctx.quadraticCurveTo(
+        ox - p.bodyLen * sc * 0.58, neckCtrlY,
+        headX + p.headSize * sc * 0.55, headY + p.headSize * sc * 0.5
+      );
+      ctx.quadraticCurveTo(
+        ox - p.bodyLen * sc * 0.52, oy,
+        ox - p.bodyLen * sc * 0.32, oy + p.bodyH * sc * 0.1
+      );
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    },
+
+    // ----------------------------------------------------------
+    // Draw an equipped accessory on top of the creature.
+    //
+    // Called at the end of draw(), inside the creature's ctx.save()
+    // block so it automatically inherits the facing-flip transform.
+    //
+    // Attachment points (in creature-local coordinates):
+    //   hat / crown  — above the head (headX, headY - headR * 1.1)
+    //   necklace     — at the neck base (between head and torso)
+    //   shirt        — at the torso centre (ox, oy)
+    //   wings        — behind the torso mid-back (ox + bodyLen * 0.3, oy)
+    //
+    // The accessory is rendered into a temporary off-screen canvas
+    // then composited onto the creature canvas at reduced scale,
+    // so the full drawXxx() renderers are reused without change.
+    // ----------------------------------------------------------
+    _drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, opts = {}) {
+      if (!this.wearing || !this.wearing.genome) return;
+      const { template, genome: ag } = this.wearing;
+      if (template === 'shirt') return;
+      const underlayNecklace = !!opts.underlayNecklace;
+
+      // Compute attachment point in creature-local canvas coords
+      const headX = ox - p.bodyLen * sc * 0.68 + pt.headDX;
+      const headY = oy - p.bodyH  * sc * 0.35  + pt.headDY;
+      const hR    = p.headSize * sc;
+
+      // Hats are rendered directly on the head so the creature visibly
+      // wears a full hat silhouette (brim + crown) at any lifecycle scale.
+      if (template === 'hat') {
+        this._drawWornHat(ctx, headX, headY, hR, ag);
+        return;
+      }
+
+      // Scale the accessory relative to the creature's current body scale.
+      // Base scale is tuned per template so head accessories remain visible
+      // on smaller lifecycle stages (baby/toddler) while torso items stay
+      // proportionate.
+      const templateScale = (
+        // Hats need extra scale on-creature because the renderer includes
+        // full brim + crown proportions intended for a larger standalone canvas.
+        template === 'hat'   ? 1.34 :
+        // Crown accessories were rendering too large on-creature relative
+        // to head radius (especially high-SZ genomes), so use a smaller
+        // baseline scalar than hats to keep the crown proportional.
+        template === 'crown' ? 0.40 :
+        template === 'wings' ? 0.85 :
+        template === 'shirt' ? 0.78 :
+        0.72 // necklace + fallback
+      );
+      const accScale = p.bodyScale * templateScale;
+      // Headwear needs a slightly larger source canvas to preserve brim details
+      // when downscaled into baby/toddler body sizes.
+      const baseCanvasScale = (
+        template === 'hat'   ? 0.66 :
+        template === 'crown' ? 0.54 :
+        0.40
+      );
+      const accW = Math.round(W * baseCanvasScale);
+      const accH = Math.round(H * baseCanvasScale);
+
+      // Per-template anchor (where the accessory's canvas centre lands on the creature)
+      let anchorX, anchorY;
+      switch (template) {
+        case 'hat':
+          // Sits on top of the head, centred horizontally
+          anchorX = headX;
+          anchorY = headY - hR * 0.42;
+          break;
+        case 'crown':
+          // Slightly higher than hat, more centred on the skull
+          anchorX = headX;
+          anchorY = headY - hR * 0.58;
+          break;
+        case 'necklace':
+          // Neck base: keep high enough to intersect the neck silhouette,
+          // so foreground neck repaint can occlude the back arc.
+          anchorX = headX + p.headSize * sc * 0.25;
+          // Lower significantly so the necklace reads as chest-worn
+          // rather than tight to the throat/jaw.
+          anchorY = headY + hR * 1.00;
+          break;
+        case 'shirt':
+          // Move farther toward the tail and slightly lower on the torso so
+          // shirts don't read as neckwear.
+          anchorX = ox + p.bodyLen * sc * 0.24;
+          anchorY = oy + p.bodyH * sc * 0.14;
+          break;
+        case 'wings':
+          // Behind the upper back near the top of the torso, tail-side biased
+          anchorX = ox + p.bodyLen * sc * 0.25;
+          anchorY = oy - p.bodyH * sc * 0.4;
+          break;
+        default:
+          anchorX = headX;
+          anchorY = headY - hR * 1.05;
+      }
+
+      // Render the accessory into an off-screen canvas
+      const offscreen = document.createElement('canvas');
+      offscreen.width  = accW;
+      offscreen.height = accH;
+      const offCtx = offscreen.getContext('2d');
+      // drawAccessory is defined in accessories.js (loaded before components.js)
+      if (typeof drawAccessory === 'function') {
+        drawAccessory(offCtx, template, ag, accW, accH);
+      }
+
+      // Composite onto the creature canvas.
+      // For hats/crowns the visual "contact point" is not the canvas centre:
+      // the brim/base sits lower than centre in the standalone accessory renderer.
+      // Map anchor to that contact zone so the creature wears the full shape
+      // (brim + crown) instead of only a tiny top sliver.
+      const dw = Math.round(accW  * accScale);
+      const dh = Math.round(accH  * accScale);
+      const focalY = (
+        template === 'hat'   ? 0.68 :
+        template === 'crown' ? 0.64 :
+        0.50
+      );
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(
+        offscreen,
+        anchorX - dw * 0.5,
+        anchorY - dh * focalY,
+        dw, dh
+      );
+      ctx.globalAlpha = 1;
+
+      // Necklace should wrap around the neck: repaint neck foreground so
+      // the back/top portion of the necklace is naturally occluded.
+      if (template === 'necklace' && !underlayNecklace) {
+        this._redrawNeckForeground(ctx, p, sc, ox, oy, pt);
+      }
     },
 
     // ----------------------------------------------------------
@@ -1587,6 +1842,13 @@ const CreatureCanvasComponent = {
         ctx.restore(); ctx.globalAlpha = 1;
       }
 
+      // ---- NECKLACE UNDERLAY ----
+      // Draw worn necklaces before neck/head so natural occlusion comes
+      // from creature geometry instead of clipping the accessory image.
+      if (!p.fossil && this.wearing && this.wearing.template === 'necklace') {
+        this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, { underlayNecklace: true });
+      }
+
       // ---- NECK ----
       const headX = ox - p.bodyLen * sc * 0.68 + pt.headDX;
       const headY = oy - p.bodyH  * sc * 0.35  + pt.headDY;
@@ -1749,6 +2011,13 @@ const CreatureCanvasComponent = {
         ctx.fillStyle = aura;
         ctx.beginPath(); ctx.arc(ox, oy, p.bodyLen * sc * 1.6, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
+      }
+
+      // ---- WEARING ACCESSORY ----
+      // Drawn last so it appears on top of the creature.
+      // Only shown for non-fossil creatures with an equipped accessory.
+      if (!p.fossil && this.wearing && this.wearing.template !== 'necklace') {
+        this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H);
       }
 
       ctx.restore();   // always restore — we always ctx.save() now
@@ -1954,6 +2223,7 @@ const CreatureCardComponent = {
       copied:            false,
       votes:             [],     // fetched on mount
       rebloggers:        [],     // fetched on mount
+      resolvedWearing:   null,   // fetched on mount for mini-card canvas
       socialLoading:     true,
       votingInProgress:  false,
       resteemInProgress: false,
@@ -1970,6 +2240,7 @@ const CreatureCardComponent = {
       this.votes      = v;
       this.rebloggers = r;
     }).catch(() => {}).finally(() => { this.socialLoading = false; });
+    this.loadWearing();
   },
   computed: {
     fossil()     { return this.post.age >= this.post.genome.LIF; },
@@ -1981,6 +2252,10 @@ const CreatureCardComponent = {
     },
     routePath()  { return "/@" + this.post.author + "/" + this.post.permlink; },
     steemitUrl() { return "https://steemit.com/@" + this.post.author + "/" + this.post.permlink; },
+    cardWearing() {
+      // Prefer pre-resolved data when available, then async card-local lookup.
+      return this.post.wearing || this.resolvedWearing || null;
+    },
     hasVoted() {
       if (!this.username) return false;
       return this.votes.some(v => v.voter === this.username && v.percent > 0);
@@ -2011,6 +2286,17 @@ const CreatureCardComponent = {
     }
   },
   methods: {
+    async loadWearing() {
+      try {
+        if (typeof fetchAllReplies !== "function" || typeof fetchCreatureWearing !== "function") return;
+        const replies = await fetchAllReplies(this.post.author, this.post.permlink);
+        const wearing = await fetchCreatureWearing(this.post.author, this.post.permlink, replies || []);
+        // Shirt accessory has been removed from creature rendering.
+        this.resolvedWearing = (wearing && wearing.template !== "shirt") ? wearing : null;
+      } catch {
+        this.resolvedWearing = null;
+      }
+    },
     toggleVotePicker(e) {
       e.preventDefault(); e.stopPropagation();
       if (!this.username || !window.steem_keychain || this.hasVoted) return;
@@ -2076,6 +2362,7 @@ const CreatureCardComponent = {
           :genome="post.genome"
           :age="post.age"
           :fossil="fossil"
+          :wearing="cardWearing"
           :canvas-w="180"
           :canvas-h="144"
           style="display:block;margin:0 auto;"
