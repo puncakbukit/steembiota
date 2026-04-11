@@ -169,6 +169,72 @@ function markDuplicates(posts) {
 // Convert a raw Steem post array into creature card data objects.
 // Filters to valid SteemBiota posts, newest first.
 const PAGE_SIZE = 15;
+const LIST_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const OWNED_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes (profile ownership scans are expensive)
+const CREATURE_PAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function readListCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.data) || typeof parsed.savedAt !== "number") return null;
+    if ((Date.now() - parsed.savedAt) > LIST_CACHE_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeListCache(key, data) {
+  try {
+    if (!Array.isArray(data)) return;
+    localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
+  } catch {}
+}
+
+// Dedicated cache for ProfileView ownership tabs.
+// Uses a longer TTL than generic lists to avoid repeatedly scanning transfer chains.
+function readOwnedProfileCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.data) || typeof parsed.savedAt !== "number") return null;
+    if ((Date.now() - parsed.savedAt) > OWNED_PROFILE_CACHE_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeOwnedProfileCache(key, data) {
+  try {
+    if (!Array.isArray(data)) return;
+    localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
+  } catch {}
+}
+
+function readCreaturePageCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.savedAt !== "number" || !parsed.data) return null;
+    if ((Date.now() - parsed.savedAt) > CREATURE_PAGE_CACHE_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeCreaturePageCache(key, data) {
+  try {
+    if (!data || !data.genome) return;
+    localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
+  } catch {}
+}
+
 function parseSteembiotaPosts(rawPosts) {
   const results = [];
   for (const p of rawPosts) {
@@ -1064,13 +1130,22 @@ const HomeView = {
   },
   methods: {
     async loadCreatureList() {
-      this.listLoading = true;
+      const cacheKey  = "steembiota:list:creatures:v1";
+      const cachedRaw = readListCache(cacheKey);
+      if (cachedRaw) {
+        this.allCreatures = parseSteembiotaPosts(cachedRaw);
+        this.listLoading = false;
+      } else {
+        this.listLoading = true;
+      }
       this.listError   = "";
       try {
         const raw = await fetchPostsByTag("steembiota", 100);
-        this.allCreatures = parseSteembiotaPosts(Array.isArray(raw) ? raw : []);
+        const safeRaw = Array.isArray(raw) ? raw : [];
+        this.allCreatures = parseSteembiotaPosts(safeRaw);
+        writeListCache(cacheKey, safeRaw);
       } catch (e) {
-        this.listError = e.message || "Failed to load creatures.";
+        if (!cachedRaw) this.listError = e.message || "Failed to load creatures.";
       }
       this.listLoading = false;
     },
@@ -1498,6 +1573,23 @@ const ProfileView = {
   },
 
   watch: {
+    '$route.params.user': {
+      immediate: false,
+      async handler(nextUser, prevUser) {
+        if (!nextUser || nextUser === prevUser) return;
+        this.crePage = 1;
+        this.accPage = 1;
+        this.filterGenus = "";
+        this.filterSex = "";
+        this.filterAgeOp = "";
+        this.filterAgeVal = "";
+        this.filterTemplate = "";
+        await Promise.all([
+          this.loadCreatures(nextUser),
+          this.loadAccessories(nextUser),
+        ]);
+      }
+    },
     filterGenus()    { this.crePage = 1; },
     filterSex()      { this.crePage = 1; },
     filterAgeOp()    { this.crePage = 1; },
@@ -1507,10 +1599,25 @@ const ProfileView = {
 
   methods: {
     async loadCreatures(user) {
+      this.creaturesError = "";
+      const cacheKey = `steembiota:owned:creatures:${String(user || "").toLowerCase()}:v2`;
+      const cached = readOwnedProfileCache(cacheKey);
+      if (cached) {
+        this.creatures = cached;
+        this.creaturesLoading = false;
+        // Refresh in background so cached view is instant but data can still update.
+        this.refreshCreatures(user, cacheKey);
+        return;
+      }
       this.creaturesLoading = true;
+      await this.refreshCreatures(user, cacheKey, { setLoadingFalse: true });
+    },
+
+    async refreshCreatures(user, cacheKey, opts = {}) {
+      const { setLoadingFalse = false } = opts;
       try {
         const owned = await fetchCreaturesOwnedBy(user, 100);
-        this.creatures = owned.map(({ post: p, meta: sb, effectiveOwner }) => {
+        const mapped = owned.map(({ post: p, meta: sb, effectiveOwner }) => {
           const age = calculateAge(p.created);
           return {
             author: p.author, permlink: p.permlink,
@@ -1525,21 +1632,50 @@ const ProfileView = {
             created: p.created || "", effectiveOwner,
           };
         }).sort((a, b) => new Date(b.created) - new Date(a.created));
+        // If we already have data on-screen (usually from cache), do not let an
+        // intermittent empty refresh wipe the tab and show a false "No creatures found".
+        const keepExisting = this.creatures.length > 0 && mapped.length === 0;
+        if (!keepExisting) this.creatures = mapped;
+        if (mapped.length > 0 || this.creatures.length === 0) {
+          writeOwnedProfileCache(cacheKey, mapped);
+        }
       } catch (e) {
-        this.creaturesError = e.message || "Failed to load creatures.";
+        if (!this.creatures.length) this.creaturesError = e.message || "Failed to load creatures.";
       }
-      this.creaturesLoading = false;
+      if (setLoadingFalse) this.creaturesLoading = false;
     },
 
     async loadAccessories(user) {
+      this.accessoriesError = "";
+      const cacheKey = `steembiota:owned:accessories:${String(user || "").toLowerCase()}:v2`;
+      const cached = readOwnedProfileCache(cacheKey);
+      if (cached) {
+        this.accessories = cached;
+        this.accessoriesLoading = false;
+        // Refresh in background so cached view is instant but data can still update.
+        this.refreshAccessories(user, cacheKey);
+        return;
+      }
       this.accessoriesLoading = true;
+      await this.refreshAccessories(user, cacheKey, { setLoadingFalse: true });
+    },
+
+    async refreshAccessories(user, cacheKey, opts = {}) {
+      const { setLoadingFalse = false } = opts;
       try {
         const owned = await fetchAccessoriesOwnedBy(user, 100);
-        this.accessories = owned.sort((a, b) => new Date(b.created) - new Date(a.created));
+        const sorted = owned.sort((a, b) => new Date(b.created) - new Date(a.created));
+        // Same protection as creatures tab: avoid replacing a known-good list
+        // with a transient empty response from chain scans.
+        const keepExisting = this.accessories.length > 0 && sorted.length === 0;
+        if (!keepExisting) this.accessories = sorted;
+        if (sorted.length > 0 || this.accessories.length === 0) {
+          writeOwnedProfileCache(cacheKey, sorted);
+        }
       } catch (e) {
-        this.accessoriesError = e.message || "Failed to load accessories.";
+        if (!this.accessories.length) this.accessoriesError = e.message || "Failed to load accessories.";
       }
-      this.accessoriesLoading = false;
+      if (setLoadingFalse) this.accessoriesLoading = false;
     },
 
     prevCre() { if (this.crePage > 1) this.crePage--; },
@@ -1743,7 +1879,11 @@ const CreatureView = {
       votingInProgress:    false,  // true while keychain vote request is open
       resteemInProgress:   false,  // true while keychain resteem request is open
       votePickerOpen:      false,  // true when the % slider popover is visible
-      votePct:             100     // last chosen upvote percentage (1–100)
+      votePct:             100,    // last chosen upvote percentage (1–100)
+      // Equipped accessory — { template, genome, accAuthor, accPermlink, accName } | null
+      wearing:             null,
+      // Equipped accessories — newest first
+      wearings:            [],
     };
   },
   created() {
@@ -1867,12 +2007,49 @@ const CreatureView = {
     }
   },
   methods: {
+    creatureCacheKey(author, permlink) {
+      return `steembiota:creature:${String(author || "").toLowerCase()}/${String(permlink || "").toLowerCase()}:v1`;
+    },
+    applyCachedCreature(cached, author, permlink) {
+      if (!cached || !cached.genome) return false;
+      this.author       = author;
+      this.permlink     = permlink;
+      this.genome       = cached.genome;
+      this.name         = cached.name || author;
+      this.creatureType = cached.creatureType || "founder";
+      this.speciated    = !!cached.speciated;
+      this.mutated      = !!cached.mutated;
+      this._postCreated = cached.postCreated || null;
+      this.postAge      = cached.postCreated ? calculateAge(cached.postCreated) : (cached.postAge ?? 0);
+      this.feedEvents   = Array.isArray(cached.feedEvents) ? cached.feedEvents : [];
+      this.feedState    = cached.feedState || computeFeedState(this.feedEvents, this.genome);
+      this.activityState   = cached.activityState || null;
+      this.transferState   = cached.transferState || null;
+      this.effectiveOwner  = cached.effectiveOwner || author;
+      this.permitState     = {
+        grantees: new Set(Array.isArray(cached.permitGrantees) ? cached.permitGrantees : [])
+      };
+      this.alreadyFedToday = !!cached.alreadyFedToday;
+      this._rawParentA     = cached.parentA || null;
+      this._rawParentB     = cached.parentB || null;
+      this.wearing         = cached.wearing || null;
+      this.wearings        = Array.isArray(cached.wearings)
+        ? cached.wearings
+        : (cached.wearing ? [cached.wearing] : []);
+      this.isPhantom       = false;
+      this.loadError       = null;
+      this.loading         = false;
+      return true;
+    },    
     async loadCreature() {
       this.loading   = true;
       this.loadError = null;
       const { author, permlink } = this.$route.params;
       this.author   = author;
       this.permlink = permlink;
+      const cacheKey = this.creatureCacheKey(author, permlink);
+      const cached   = readCreaturePageCache(cacheKey);
+      this.applyCachedCreature(cached, author, permlink);
       try {
         const post = await fetchPost(author, permlink);
         if (!post) throw new Error("Post not found.");
@@ -1933,6 +2110,66 @@ const CreatureView = {
         // Store parent refs from metadata (no extra fetch needed for display)
         this._rawParentA = sb.parentA || null;
         this._rawParentB = sb.parentB || null;
+        
+        // Fetch equipped accessory in background
+        fetchCreatureWearings(author, permlink, replies).then(ws => {
+          if (!ws || (ws.length === 0 && this.wearings.length > 0)) {
+             // If background fetch returns empty but we already had items 
+             // from cache, the RPC likely failed. Do NOT wipe the UI.
+             if (!ws) return; 
+          }
+          
+          // Merge results, preserving genome data for items that had network errors
+          this.wearings = ws.map(newItem => {
+             if (newItem.networkError) {
+                const existing = this.wearings.find(ex => ex.accPermlink === newItem.accPermlink);
+                return existing || newItem;
+             }
+             return newItem;
+          });
+          
+          this.wearing = this.wearings[0] || null;
+          
+          // ONLY write to cache once we have a high-confidence state
+          writeCreaturePageCache(cacheKey, {
+            genome: this.genome,
+            name: this.name,
+            creatureType: this.creatureType,
+            postCreated: this._postCreated,
+            postAge: this.postAge,
+            feedEvents: this.feedEvents,
+            feedState: this.feedState,
+            effectiveOwner: this.effectiveOwner,
+            transferState: this.transferState,
+            parentA: this._rawParentA,
+            parentB: this._rawParentB,
+            wearings: this.wearings
+          });
+        }).catch(err => {
+          console.error("Accessory sync failed:", err);
+          // Do NOT reset this.wearings to [] here; keep the cached version visible.
+        });
+
+        // FIX: The "Immediate Write" should NOT include the wearings array 
+        // if the background fetch is still pending, to avoid wiping it.
+        const snapshot = {
+          genome: this.genome,
+          name: this.name,
+          creatureType: this.creatureType,
+          postCreated: this._postCreated,
+          postAge: this.postAge,
+          feedEvents: this.feedEvents,
+          feedState: this.feedState,
+          effectiveOwner: this.effectiveOwner,
+          transferState: this.transferState,
+          parentA: this._rawParentA,
+          parentB: this._rawParentB
+        };
+        // Only include wearings in the immediate write if we already have them from applyCachedCreature
+        if (this.wearings && this.wearings.length > 0) {
+           snapshot.wearings = this.wearings;
+        }
+        writeCreaturePageCache(cacheKey, snapshot);
 
       } catch (err) {
         this.loadError = err.message || "Failed to load creature.";
@@ -2356,6 +2593,8 @@ const CreatureView = {
         <creature-canvas-component :genome="genome" :age="postAge" :fossil="fossil" :feed-state="feedState"
           :activity-state="activityState"
           :reaction-trigger="reactionTrigger"
+          :wearing="wearing"
+          :wearings="wearings"
           @facing-resolved="onFacingResolved"
           @pose-resolved="onPoseResolved"
         ></creature-canvas-component>
@@ -2456,6 +2695,18 @@ const CreatureView = {
         <div v-if="fossil" style="margin:6px 0;color:#666;font-size:0.85rem;letter-spacing:0.05em;">
           🦴 This creature has fossilised. Its genome is preserved on-chain.
         </div>
+
+        <!-- ── Worn Accessories + Equip Panel ── -->
+        <equip-panel-component
+          :username="username"
+          :creature-author="author"
+          :creature-permlink="permlink"
+          :creature-name="name"
+          :wearings="wearings"
+          :is-owner="isOwner"
+          @notify="(msg,type) => notify(msg,type)"
+          @wearings-updated="ws => { wearings = ws; wearing = ws[0] || null; }"
+        ></equip-panel-component>
 
         <!-- Activity panel (Feed + Play + Walk) -->
         <activity-panel-component
@@ -3447,6 +3698,8 @@ vueApp.component("LoadingSpinnerComponent",     LoadingSpinnerComponent);
 vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
 vueApp.component("AccessoryCanvasComponent",    AccessoryCanvasComponent);
 vueApp.component("AccessoryCardComponent",      AccessoryCardComponent);
+vueApp.component("WearPanelComponent",          WearPanelComponent);
+vueApp.component("EquipPanelComponent",         EquipPanelComponent);
 vueApp.component("AccessoryItemView",           AccessoryItemView);
 vueApp.component("GenomeTableComponent",        GenomeTableComponent);
 vueApp.component("BreedingPanelComponent",      BreedingPanelComponent);

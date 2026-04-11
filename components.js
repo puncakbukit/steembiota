@@ -185,6 +185,8 @@ const CreatureCanvasComponent = {
     canvasH:         { type: Number,  default: 320   },
     // Accessory being worn — { template, genome } or null
     wearing:         { type: Object,  default: null  },
+    // Multiple accessories currently worn (new API).
+    wearings:        { type: Array,   default: () => [] },
   },
   emits: ["facing-resolved", "pose-resolved", "clicked"],
   data() {
@@ -247,6 +249,7 @@ const CreatureCanvasComponent = {
     feedState()        { this.$nextTick(() => this.draw()); },
     activityState()    { this.$nextTick(() => this.draw()); },
     wearing()          { this.$nextTick(() => this.draw()); },
+    wearings()         { this.$nextTick(() => this.draw()); },
     reactionTrigger(v) { if (v > 0) this._startReaction(); }
   },
   mounted() {
@@ -282,6 +285,14 @@ const CreatureCanvasComponent = {
     }
   },
   methods: {
+    _normalizedWearings() {
+      if (Array.isArray(this.wearings) && this.wearings.length) {
+        return this.wearings.filter(w => w && w.genome && w.template !== "shirt");
+      }
+      return (this.wearing && this.wearing.genome && this.wearing.template !== "shirt")
+        ? [this.wearing]
+        : [];
+    },
 
     // ----------------------------------------------------------
     // Reaction animation — triggered when the creature is fed,
@@ -963,9 +974,9 @@ const CreatureCanvasComponent = {
     // then composited onto the creature canvas at reduced scale,
     // so the full drawXxx() renderers are reused without change.
     // ----------------------------------------------------------
-    _drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, opts = {}) {
-      if (!this.wearing || !this.wearing.genome) return;
-      const { template, genome: ag } = this.wearing;
+    _drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, accessory, opts = {}) {
+      if (!accessory || !accessory.genome) return;
+      const { template, genome: ag } = accessory;
       if (template === 'shirt') return;
       const underlayNecklace = !!opts.underlayNecklace;
 
@@ -993,7 +1004,10 @@ const CreatureCanvasComponent = {
         // to head radius (especially high-SZ genomes), so use a smaller
         // baseline scalar than hats to keep the crown proportional.
         template === 'crown' ? 0.40 :
-        template === 'wings' ? 0.85 :
+        // Wings should read clearly behind the torso. Keep them a bit larger
+        // than torso width so the outer tips remain visible even when the
+        // torso is painted on top in the underlay pass.
+        template === 'wings' ? 1.05 :
         template === 'shirt' ? 0.78 :
         0.72 // necklace + fallback
       );
@@ -1003,6 +1017,9 @@ const CreatureCanvasComponent = {
       const baseCanvasScale = (
         template === 'hat'   ? 0.66 :
         template === 'crown' ? 0.54 :
+        // Wing renderers can extend far beyond centre; a small source canvas
+        // clips them, making equipped wings disappear or look truncated.
+        template === 'wings' ? 0.74 :
         0.40
       );
       const accW = Math.round(W * baseCanvasScale);
@@ -1036,9 +1053,10 @@ const CreatureCanvasComponent = {
           anchorY = oy + p.bodyH * sc * 0.14;
           break;
         case 'wings':
-          // Behind the upper back near the top of the torso, tail-side biased
-          anchorX = ox + p.bodyLen * sc * 0.25;
-          anchorY = oy - p.bodyH * sc * 0.4;
+          // Behind the upper back, shifted tail-side and slightly higher so
+          // the torso occludes the root while the wing span remains visible.
+          anchorX = ox + p.bodyLen * sc * 0.40;
+          anchorY = oy - p.bodyH * sc * 0.62;
           break;
         default:
           anchorX = headX;
@@ -1052,7 +1070,7 @@ const CreatureCanvasComponent = {
       const offCtx = offscreen.getContext('2d');
       // drawAccessory is defined in accessories.js (loaded before components.js)
       if (typeof drawAccessory === 'function') {
-        drawAccessory(offCtx, template, ag, accW, accH);
+        drawAccessory(offCtx, template, ag, accW, accH, { transparentBackground: true, isWorn: true });
       }
 
       // Composite onto the creature canvas.
@@ -1065,6 +1083,7 @@ const CreatureCanvasComponent = {
       const focalY = (
         template === 'hat'   ? 0.68 :
         template === 'crown' ? 0.64 :
+        template === 'wings' ? 0.62 :
         0.50
       );
       ctx.globalAlpha = 0.95;
@@ -1682,6 +1701,7 @@ const CreatureCanvasComponent = {
       const hue = p.finalHue;
       const sat = p.colorSat;
       const lit = p.colorLight;
+      const wearings = this._normalizedWearings();
 
       // ---- FOSSIL ----
       if (p.fossil) {
@@ -1842,11 +1862,21 @@ const CreatureCanvasComponent = {
         ctx.restore(); ctx.globalAlpha = 1;
       }
 
+      // ---- WINGS LAYER ----
+      // Draw wings after torso so they remain visible.
+      if (!p.fossil) {
+        wearings
+          .filter(w => w.template === "wings")
+          .forEach(w => this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, w));
+      }
+
       // ---- NECKLACE UNDERLAY ----
       // Draw worn necklaces before neck/head so natural occlusion comes
       // from creature geometry instead of clipping the accessory image.
-      if (!p.fossil && this.wearing && this.wearing.template === 'necklace') {
-        this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, { underlayNecklace: true });
+      if (!p.fossil) {
+        wearings
+          .filter(w => w.template === "necklace")
+          .forEach(w => this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, w, { underlayNecklace: true }));
       }
 
       // ---- NECK ----
@@ -2016,8 +2046,10 @@ const CreatureCanvasComponent = {
       // ---- WEARING ACCESSORY ----
       // Drawn last so it appears on top of the creature.
       // Only shown for non-fossil creatures with an equipped accessory.
-      if (!p.fossil && this.wearing && this.wearing.template !== 'necklace') {
-        this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H);
+      if (!p.fossil) {
+        wearings
+          .filter(w => w.template !== "necklace" && w.template !== "wings")
+          .forEach(w => this._drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, w));
       }
 
       ctx.restore();   // always restore — we always ctx.save() now
@@ -4036,6 +4068,353 @@ const SocialPanelComponent = {
         </div>
 
       </template>
+    </div>
+  `
+};
+
+// ============================================================
+// EquipPanelComponent
+//
+// Shown on the CreatureView. Lets the creature owner equip and
+// remove accessories that they have permission to wear.
+//
+// Lists currently worn accessories with a "Remove" button on each.
+// Provides an "Equip Accessory" form where the owner pastes an
+// accessory URL — the system fetches the accessory, verifies the
+// owner has permission (public domain or per-user grant), checks
+// it isn't already worn by another creature, then posts wear_on.
+//
+// Props:
+//   username        — logged-in user (or "")
+//   creatureAuthor  — creature post author
+//   creaturePermlink— creature post permlink
+//   creatureName    — display name
+//   wearings        — Array from fetchCreatureWearings()
+//                     [{ template, genome, accAuthor, accPermlink, accName, permissionLapsed }]
+//   isOwner         — true when username is the creature's effective owner
+//
+// Emits:
+//   notify(msg, type)
+//   wearings-updated(newWearings)
+// ============================================================
+const EquipPanelComponent = {
+  name: "EquipPanelComponent",
+  props: {
+    username:         { type: String, default: "" },
+    creatureAuthor:   { type: String, required: true },
+    creaturePermlink: { type: String, required: true },
+    creatureName:     { type: String, default: "" },
+    wearings:         { type: Array,  default: () => [] },
+    isOwner:          { type: Boolean, default: false },
+  },
+  emits: ["notify", "wearings-updated"],
+
+  data() {
+    return {
+      expanded:      false,
+      accUrlInput:   "",
+      publishing:    false,
+      checkingUrl:   false,
+      previewAcc:    null,
+      previewError:  "",
+
+      // --- CLOSET ---
+      closet:        [],
+      loadingCloset: false
+    };
+  },
+
+  computed: {
+    hasWearings() { return this.wearings.length > 0; },
+    lapsingWearings() { return this.wearings.filter(w => w.permissionLapsed); },
+  },
+
+  watch: {
+    accUrlInput() {
+      this.previewAcc   = null;
+      this.previewError = "";
+    },
+    expanded(isExpanded) {
+      if (isExpanded && this.username) this.loadCloset();
+    }
+  },
+
+  methods: {
+    async loadCloset() {
+      this.loadingCloset = true;
+      try {
+        const items = await fetchAccessoriesOwnedBy(this.username);
+
+        // exclude already worn
+        const currentKeys = new Set(
+          this.wearings.map(w => `${w.accAuthor}/${w.accPermlink}`)
+        );
+
+        this.closet = items.filter(
+          i => !currentKeys.has(`${i.author}/${i.permlink}`)
+        );
+      } catch (e) {
+        console.warn(e);
+      }
+      this.loadingCloset = false;
+    },
+
+    selectFromCloset(item) {
+      this.accUrlInput = `https://steemit.com/@${item.author}/${item.permlink}`;
+      this.checkAccessory();
+    },
+
+    parseAccUrl(raw) {
+      const m = raw.trim().match(/@([a-z0-9.-]+)\/([a-z0-9-]+)\s*$/i);
+      if (!m) throw new Error("Cannot parse accessory URL");
+      return {
+        author: m[1].toLowerCase(),
+        permlink: m[2].toLowerCase()
+      };
+    },
+
+    async checkAccessory() {
+      if (!this.accUrlInput.trim()) return;
+
+      this.previewAcc   = null;
+      this.previewError = "";
+      this.checkingUrl  = true;
+
+      try {
+        const { author, permlink } = this.parseAccUrl(this.accUrlInput);
+
+        // 1. Validate post
+        const post = await fetchPost(author, permlink);
+        if (!post || !post.author)
+          throw new Error("Accessory post not found.");
+
+        let meta = {};
+        try { meta = JSON.parse(post.json_metadata || "{}"); } catch {}
+
+        if (meta.steembiota?.type !== "accessory")
+          throw new Error("This post is not a SteemBiota accessory.");
+
+        const accData = meta.steembiota.accessory;
+
+        // 2. Permissions
+        const accReplies = await fetchAllReplies(author, permlink);
+        const perms = parseAccessoryPermissions(accReplies, author);
+
+        if (!isWearPermitted(perms, this.username)) {
+          throw new Error(
+            "You don't have permission to wear this. Visit the accessory page to request it."
+          );
+        }
+
+        // 3. Exclusivity
+        const busyCreature = await findCreatureWearingAccessory(
+          this.username,
+          author,
+          permlink
+        );
+
+        if (busyCreature) {
+          throw new Error(
+            `This accessory is already being worn by ${busyCreature}. You must remove it there first.`
+          );
+        }
+
+        this.previewAcc = {
+          template:    accData.template || "hat",
+          genome:      accData.genome,
+          accName:     accData.name || author,
+          accAuthor:   author,
+          accPermlink: permlink,
+        };
+
+      } catch (e) {
+        this.previewError = e.message || "Failed to load accessory.";
+      }
+
+      this.checkingUrl = false;
+    },
+
+    async equipAccessory() {
+      if (!this.previewAcc || !window.steem_keychain) return;
+
+      this.publishing = true;
+
+      const { accAuthor, accPermlink, accName } = this.previewAcc;
+
+      publishWearOn(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        accAuthor,
+        accPermlink,
+        accName,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", `🧢 ${accName} equipped!`, "success");
+
+            const newWearing = {
+              ...this.previewAcc,
+              permissionLapsed: false
+            };
+
+            this.$emit("wearings-updated", [
+              newWearing,
+              ...this.wearings
+            ]);
+
+            this.accUrlInput  = "";
+            this.previewAcc   = null;
+            this.previewError = "";
+
+            this.loadCloset(); // refresh closet
+          } else {
+            this.$emit(
+              "notify",
+              "Equip failed: " + (res.message || "Unknown error"),
+              "error"
+            );
+          }
+        }
+      );
+    },
+
+    async removeAccessory(w) {
+      if (!window.steem_keychain) return;
+
+      this.publishing = true;
+
+      publishWearOff(
+        this.username,
+        this.creatureAuthor,
+        this.creaturePermlink,
+        this.creatureName,
+        w.accAuthor,
+        w.accPermlink,
+        w.accName,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", `👚 ${w.accName} removed.`, "success");
+
+            this.$emit(
+              "wearings-updated",
+              this.wearings.filter(
+                x =>
+                  x.accPermlink !== w.accPermlink ||
+                  x.accAuthor !== w.accAuthor
+              )
+            );
+
+            this.loadCloset(); // refresh closet
+          } else {
+            this.$emit(
+              "notify",
+              "Remove failed: " + (res.message || "Unknown error"),
+              "error"
+            );
+          }
+        }
+      );
+    },
+  },
+
+  template: `
+    <div style="max-width:520px;margin:16px auto;">
+
+      <!-- WORN -->
+      <div v-if="hasWearings" style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <span style="font-size:0.78rem;color:#ce93d8;text-transform:uppercase;font-weight:bold;">
+            ✨ Worn Accessories
+          </span>
+          <span style="font-size:0.72rem;color:#555;">{{ wearings.length }}</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div v-for="w in wearings" :key="w.accAuthor+'/'+w.accPermlink"
+            style="display:flex;align-items:center;gap:12px;padding:10px;border-radius:8px;background:#0d0a10;border:1px solid #2a1a2e;">
+
+            <accessory-canvas-component
+              :template="w.template"
+              :genome="w.genome"
+              :canvas-w="80"
+              :canvas-h="64"
+            />
+
+            <div style="flex:1;text-align:left;">
+              <div style="font-weight:bold;color:#ce93d8;">{{ w.accName }}</div>
+              <div v-if="w.permissionLapsed" style="color:#ff8a80;">⚠ Lapsed</div>
+            </div>
+
+            <button v-if="isOwner" @click="removeAccessory(w)" :disabled="publishing">
+              👚 Remove
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- EQUIP -->
+      <template v-if="isOwner && username">
+
+        <div @click="expanded=!expanded">
+          🧢 Equip an Accessory {{ expanded ? "▲" : "▼" }}
+        </div>
+
+        <div v-if="expanded">
+
+          <!-- CLOSET -->
+          <div>
+            <div>👜 Closet</div>
+
+            <div v-if="loadingCloset">Loading...</div>
+
+            <div v-else-if="closet.length === 0">Empty</div>
+
+            <div v-else style="display:flex;gap:8px;overflow-x:auto;">
+              <div v-for="item in closet"
+                   :key="item.permlink"
+                   @click="selectFromCloset(item)">
+                <accessory-canvas-component
+                  :template="item.template"
+                  :genome="item.genome"
+                  :canvas-w="58"
+                  :canvas-h="46"
+                />
+                <div>{{ item.name }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- INPUT -->
+          <input v-model="accUrlInput" @keydown.enter="checkAccessory" />
+          <button @click="checkAccessory" :disabled="checkingUrl">
+            {{ checkingUrl ? "Checking…" : "Check" }}
+          </button>
+
+          <div v-if="previewError">⚠ {{ previewError }}</div>
+
+          <div v-if="previewAcc">
+            <accessory-canvas-component
+              :template="previewAcc.template"
+              :genome="previewAcc.genome"
+              :canvas-w="80"
+              :canvas-h="64"
+            />
+            <div>{{ previewAcc.accName }}</div>
+
+            <button @click="equipAccessory" :disabled="publishing">
+              🧢 Equip
+            </button>
+          </div>
+
+        </div>
+
+      </template>
+
     </div>
   `
 };
