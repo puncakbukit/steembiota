@@ -172,6 +172,9 @@ const PAGE_SIZE = 15;
 const LIST_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const OWNED_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes (profile ownership scans are expensive)
 const CREATURE_PAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const LEADERBOARD_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes (fetch is expensive: 2N RPC calls per author)
+const NOTIFICATIONS_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+const ACCESSORY_PAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 function readListCache(key) {
   try {
@@ -186,11 +189,53 @@ function readListCache(key) {
   }
 }
 
-function writeListCache(key, data) {
+// Evict the oldest steembiota:* localStorage entries until at least `bytesNeeded`
+// bytes have been freed, then retry the write. Called only on QuotaExceededError.
+function _evictOldestAndRetry(key, serialized) {
   try {
-    if (!Array.isArray(data)) return;
-    localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
-  } catch {}
+    // Collect every steembiota key with its savedAt timestamp.
+    const entries = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith("steembiota:")) continue;
+      try {
+        const parsed = JSON.parse(localStorage.getItem(k));
+        entries.push({ k, savedAt: (parsed && parsed.savedAt) ? parsed.savedAt : 0 });
+      } catch {
+        entries.push({ k, savedAt: 0 });
+      }
+    }
+    // Remove oldest first until the write succeeds or we run out of entries.
+    entries.sort((a, b) => a.savedAt - b.savedAt);
+    for (const { k } of entries) {
+      localStorage.removeItem(k);
+      try {
+        localStorage.setItem(key, serialized);
+        return; // write succeeded after eviction
+      } catch {}
+    }
+    console.warn("SteemBiota cache: localStorage still full after eviction — skipping write for", key);
+  } catch (err) {
+    console.warn("SteemBiota cache: eviction failed:", err);
+  }
+}
+
+function _safeSet(key, serialized) {
+  try {
+    localStorage.setItem(key, serialized);
+  } catch (err) {
+    if (err && (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED" || err.code === 22)) {
+      console.warn("SteemBiota cache: localStorage quota exceeded — evicting old entries and retrying.");
+      _evictOldestAndRetry(key, serialized);
+    } else {
+      console.warn("SteemBiota cache: localStorage write error:", err);
+    }
+  }
+}
+
+function writeListCache(key, data) {
+  if (!Array.isArray(data)) return;
+  _safeSet(key, JSON.stringify({ savedAt: Date.now(), data }));
 }
 
 // Dedicated cache for ProfileView ownership tabs.
@@ -209,10 +254,8 @@ function readOwnedProfileCache(key) {
 }
 
 function writeOwnedProfileCache(key, data) {
-  try {
-    if (!Array.isArray(data)) return;
-    localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
-  } catch {}
+  if (!Array.isArray(data)) return;
+  _safeSet(key, JSON.stringify({ savedAt: Date.now(), data }));
 }
 
 function readCreaturePageCache(key) {
@@ -229,10 +272,65 @@ function readCreaturePageCache(key) {
 }
 
 function writeCreaturePageCache(key, data) {
+  if (!data || !data.genome) return;
+  _safeSet(key, JSON.stringify({ savedAt: Date.now(), data }));
+}
+
+function readObjectCache(key, ttlMs) {
   try {
-    if (!data || !data.genome) return;
-    localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data }));
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.savedAt !== "number" || !parsed.data) return null;
+    if ((Date.now() - parsed.savedAt) > ttlMs) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeObjectCache(key, data) {
+  if (!data) return;
+  _safeSet(key, JSON.stringify({ savedAt: Date.now(), data }));
+}
+
+function removeCacheByPrefix(prefix) {
+  try {
+    // Snapshot all matching keys first — removing items during live iteration
+    // can shift indices in some browsers and cause keys to be skipped.
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix)) keys.push(k);
+    }
+    for (const k of keys) localStorage.removeItem(k);
   } catch {}
+}
+
+function invalidateGlobalListCaches() {
+  removeCacheByPrefix("steembiota:list:");
+}
+
+function invalidateOwnedCachesForUser(user) {
+  const u = String(user || "").toLowerCase();
+  if (!u) return;
+  removeCacheByPrefix(`steembiota:owned:creatures:${u}:`);
+  removeCacheByPrefix(`steembiota:owned:accessories:${u}:`);
+  removeCacheByPrefix(`steembiota:notifications:${u}:`);
+}
+
+function invalidateCreatureCache(author, permlink) {
+  const a = String(author || "").toLowerCase();
+  const p = String(permlink || "").toLowerCase();
+  if (!a || !p) return;
+  localStorage.removeItem(`steembiota:creature:${a}/${p}:v1`);
+}
+
+function invalidateAccessoryCache(author, permlink) {
+  const a = String(author || "").toLowerCase();
+  const p = String(permlink || "").toLowerCase();
+  if (!a || !p) return;
+  localStorage.removeItem(`steembiota:accessory:${a}/${p}:v1`);
 }
 
 function parseSteembiotaPosts(rawPosts) {
@@ -1169,6 +1267,8 @@ const HomeView = {
       publishCreature(this.username, this.genome, this.unicodeArt, this.creatureName, this.age, this.lifecycleStage.name, this.customTitle, generateGenusName(this.genome.GEN), (response) => {
         this.publishing = false;
         if (response.success) {
+          invalidateGlobalListCaches();
+          invalidateOwnedCachesForUser(this.username);
           this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
           this.$router.push("/@" + this.username + "/" + response.permlink);
         } else {
@@ -2135,14 +2235,20 @@ const CreatureView = {
             genome: this.genome,
             name: this.name,
             creatureType: this.creatureType,
+            speciated: this.speciated,
+            mutated: this.mutated,
             postCreated: this._postCreated,
             postAge: this.postAge,
             feedEvents: this.feedEvents,
             feedState: this.feedState,
+            activityState: this.activityState,
             effectiveOwner: this.effectiveOwner,
             transferState: this.transferState,
+            permitGrantees: [...(this.permitState?.grantees || [])],
+            alreadyFedToday: this.alreadyFedToday,
             parentA: this._rawParentA,
             parentB: this._rawParentB,
+            wearing: this.wearing,
             wearings: this.wearings
           });
         }).catch(err => {
@@ -2156,14 +2262,20 @@ const CreatureView = {
           genome: this.genome,
           name: this.name,
           creatureType: this.creatureType,
+          speciated: this.speciated,
+          mutated: this.mutated,
           postCreated: this._postCreated,
           postAge: this.postAge,
           feedEvents: this.feedEvents,
           feedState: this.feedState,
+          activityState: this.activityState,
           effectiveOwner: this.effectiveOwner,
           transferState: this.transferState,
+          permitGrantees: [...(this.permitState?.grantees || [])],
+          alreadyFedToday: this.alreadyFedToday,
           parentA: this._rawParentA,
-          parentB: this._rawParentB
+          parentB: this._rawParentB,
+          wearing: this.wearing
         };
         // Only include wearings in the immediate write if we already have them from applyCachedCreature
         if (this.wearings && this.wearings.length > 0) {
@@ -2336,6 +2448,9 @@ const CreatureView = {
     onTransferUpdated(newTransferState) {
       this.transferState  = newTransferState;
       this.effectiveOwner = newTransferState.effectiveOwner;
+      invalidateGlobalListCaches();
+      invalidateOwnedCachesForUser(this.username);
+      invalidateCreatureCache(this.author, this.permlink);
       // Void pre-transfer permits when ownership changes
       this.permitState = parseBreedPermitsWithTransfer(
         [],   // optimistic — full reload will reconcile on next visit
@@ -2976,6 +3091,13 @@ const LeaderboardView = {
   async created() {
     this.loading   = true;
     this.loadError = "";
+    const cacheKey = "steembiota:leaderboard:v1";
+    const cached = readObjectCache(cacheKey, LEADERBOARD_CACHE_TTL_MS);
+    if (cached && Array.isArray(cached.entries)) {
+      this.entries = cached.entries;
+      this.topXp = Math.max(1, cached.topXp ?? (cached.entries[0]?.xp ?? 1));
+      this.loading = false;
+    }
     try {
       // getDiscussionsByCreated has a hard limit of 100 per call.
       // Fetch two pages using start_author/start_permlink cursor to get ~200 posts.
@@ -3051,8 +3173,9 @@ const LeaderboardView = {
         profile: profiles[e.author] || { username: e.author, displayName: e.author, profileImage: "", about: "" }
       }));
       this.topXp = Math.max(1, this.entries[0]?.xp ?? 1);
+      writeObjectCache(cacheKey, { entries: this.entries, topXp: this.topXp });
     } catch (e) {
-      this.loadError = e.message || "Failed to load leaderboard.";
+      if (!cached) this.loadError = e.message || "Failed to load leaderboard.";
     }
     this.loading = false;
   },
@@ -3209,10 +3332,18 @@ const NotificationsView = {
       return;
     }
     this.loading = true;
+    const cacheKey = `steembiota:notifications:${String(this.username).toLowerCase()}:v1`;
+    const cached = readObjectCache(cacheKey, NOTIFICATIONS_CACHE_TTL_MS);
+    if (cached && Array.isArray(cached.notifications)) {
+      this.notifications = cached.notifications;
+      this.loading = false;
+    }
     try {
-      this.notifications = await fetchNotificationsForUser(this.username, 50);
+      const fresh = await fetchNotificationsForUser(this.username, 50);
+      this.notifications = Array.isArray(fresh) ? fresh : [];
+      writeObjectCache(cacheKey, { notifications: this.notifications });
     } catch (e) {
-      this.loadError = e.message || "Failed to load notifications.";
+      if (!cached) this.loadError = e.message || "Failed to load notifications.";
     }
     this.loading = false;
   },
@@ -3278,6 +3409,9 @@ const NotificationsView = {
           delete accepting[key];
           this.accepting = accepting;
           if (res.success) {
+            invalidateGlobalListCaches();
+            invalidateOwnedCachesForUser(this.username);
+            invalidateCreatureCache(n.creatureAuthor, n.creaturePermlink);
             this.notify(`✅ You now own ${n.creatureName}! Visit your profile to see it.`, "success");
             // Remove this offer from the list
             this.notifications = this.notifications.filter(
@@ -3285,6 +3419,8 @@ const NotificationsView = {
                      x.creatureAuthor === n.creatureAuthor &&
                      x.creaturePermlink === n.creaturePermlink)
             );
+            const cacheKey = `steembiota:notifications:${String(this.username).toLowerCase()}:v1`;
+            writeObjectCache(cacheKey, { notifications: this.notifications });
           } else {
             this.notify("Accept failed: " + (res.message || "Unknown error"), "error");
           }
