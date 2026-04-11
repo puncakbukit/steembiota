@@ -7,7 +7,7 @@
 // the creature system:
 //
 //   accessoryGenome  → deterministic parameters (colour, shape, size)
-//   template         → one of 5 types: hat | crown | necklace | shirt | wings
+//   template         → one of 4 types: hat | crown | necklace | wings
 //   AccessoryCanvasComponent → renders the accessory on a 400×320 canvas
 //   AccessoryCardComponent   → compact card for the browse grid
 //   AccessoriesView          → /#/accessories browse page + creator tool
@@ -88,7 +88,6 @@ const ACC_NOUNS = {
   hat:      ["Cap","Brim","Topper","Slouch","Fedora","Cloche","Bonnet","Pork Pie"],
   crown:    ["Crown","Tiara","Diadem","Circlet","Wreath","Coronet","Halo","Aureole"],
   necklace: ["Pendant","Choker","Chain","Torque","Amulet","Locket","Collar","Beads"],
-  shirt:    ["Vest","Jacket","Coat","Mantle","Tunic","Surcoat","Cape","Robe"],
   wings:    ["Wings","Plumes","Vanes","Pinions","Sails","Fins","Fans","Feathers"]
 };
 
@@ -99,7 +98,7 @@ function generateAccessoryName(template, genome) {
 }
 
 // ============================================================
-// ACCESSORY TEMPLATES — 5 renderers
+// ACCESSORY TEMPLATES — 4 renderers
 //
 // Each renderer is a pure function:
 //   drawXxx(ctx, genome, W, H, opts)
@@ -332,53 +331,59 @@ function drawNecklace(ctx, g, W, H) {
   const hue = g.CLR, sat = g.SAT, lit = g.LIT;
   const aHue = (hue + 150 + rngA() * 80) % 360;
 
-  const chainW  = (70 + rng()  * 40) * sz;
-  const chainDy = (30 + rngS() * 20) * sz;   // how low the chain drapes
-  const beads   = 6 + Math.floor(rngS() * 7); // number of beads along chain
-  const chainY  = cy - 10 * sz;
+  // Ring sized/positioned to read as neckwear (encircling the neck),
+  // not a loose hanging chain.
+  const ringRx   = (56 + rng()  * 26) * sz;
+  const ringRy   = (18 + rngS() * 10) * sz;
+  const ringY    = cy - (18 + rngS() * 6) * sz;
+  const ringThk  = (3.2 + rngS() * 2.2) * sz;
+  const links    = 10 + Math.floor(rngS() * 8);
 
-  // Draw chain as a catenary arc
-  const chainStroke = _hsl(hue, sat, lit);
-  ctx.strokeStyle = chainStroke;
-  ctx.lineWidth   = (2 + rngS() * 2) * sz;
+  // Back half of the necklace (darker) to imply it wraps behind neck.
+  ctx.strokeStyle = _hsl(hue, Math.max(25, sat - 12), lit - 24, 0.72);
+  ctx.lineWidth   = ringThk * 0.9;
   ctx.lineCap     = "round";
   ctx.beginPath();
-  ctx.moveTo(cx - chainW, chainY);
-  ctx.quadraticCurveTo(cx, chainY + chainDy, cx + chainW, chainY);
+  ctx.ellipse(cx, ringY, ringRx, ringRy, 0, Math.PI, Math.PI * 2, false);
   ctx.stroke();
-  ctx.lineCap = "butt";
 
-  // Beads along the chain
-  for (let i = 0; i <= beads; i++) {
-    const t  = i / beads;
-    // Quadratic bezier position
-    const bx = (1 - t) * (1 - t) * (cx - chainW)
-              + 2 * (1 - t) * t * cx
-              + t * t * (cx + chainW);
-    const by = (1 - t) * (1 - t) * chainY
-              + 2 * (1 - t) * t * (chainY + chainDy)
-              + t * t * chainY;
-    const br = (3 + rng() * 3.5) * sz;
+  // Front lower half: brighter and thicker.
+  const frontGr = _linGrad(ctx, cx - ringRx, ringY - ringRy, cx + ringRx, ringY + ringRy,
+    [[0, _hsl(hue, sat, lit - 10)], [0.5, _hsl(hue, sat, lit + 8)], [1, _hsl(hue, sat, lit - 12)]]
+  );
+  ctx.strokeStyle = frontGr;
+  ctx.lineWidth   = ringThk;
+  ctx.beginPath();
+  ctx.ellipse(cx, ringY, ringRx, ringRy, 0, 0, Math.PI, false);
+  ctx.stroke();
+
+  // Beads/links only on visible front arc.
+  for (let i = 0; i <= links; i++) {
+    const t = i / links;
+    const ang = Math.PI - t * Math.PI; // left (π) to right (0) along front half
+    const bx = cx + Math.cos(ang) * ringRx;
+    const by = ringY + Math.sin(ang) * ringRy;
+    const br = (2.4 + rng() * 2.8) * sz;
     const beadHue = rng() > 0.5 ? hue : aHue;
-    const beadGr  = _radGrad(ctx, bx - br * 0.3, by - br * 0.3, 0, br,
-      [[0, _hsl(beadHue, sat + 10, lit + 25)], [0.6, _hsl(beadHue, sat, lit)], [1, _hsl(beadHue, sat, lit - 20)]]
+    const beadGr  = _radGrad(ctx, bx - br * 0.28, by - br * 0.28, 0, br,
+      [[0, _hsl(beadHue, sat + 10, lit + 24)], [0.6, _hsl(beadHue, sat, lit)], [1, _hsl(beadHue, sat, lit - 20)]]
     );
     ctx.fillStyle   = beadGr;
-    ctx.strokeStyle = _hsl(beadHue, sat, lit - 25, 0.7);
-    ctx.lineWidth   = 0.6;
+    ctx.strokeStyle = _hsl(beadHue, sat, lit - 26, 0.7);
+    ctx.lineWidth   = 0.55;
     ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
     ctx.fill(); ctx.stroke();
     if (g.SHN > 25) {
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.beginPath(); ctx.arc(bx - br * 0.32, by - br * 0.32, br * 0.28, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath(); ctx.arc(bx - br * 0.3, by - br * 0.3, br * 0.25, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  // Central pendant
+  // Central pendant hangs only slightly below the ring so necklace still reads as a collar.
   const pendX = cx;
-  const pendY = chainY + chainDy + (14 + rngO() * 10) * sz;
-  const pendR = (10 + rngO() * 10) * sz;
+  const pendY = ringY + ringRy + (8 + rngO() * 8) * sz;
+  const pendR = (8 + rngO() * 8) * sz;
   const pendStyle = Math.floor(rngO() * 3); // 0=circle 1=diamond 2=teardrop
 
   const pendGr = _radGrad(ctx, pendX - pendR * 0.3, pendY - pendR * 0.3, 0, pendR * 1.2,
@@ -405,6 +410,7 @@ function drawNecklace(ctx, g, W, H) {
     ctx.bezierCurveTo(pendX - pendR, pendY + pendR * 0.8, pendX - pendR, pendY - pendR * 0.5, pendX, pendY - pendR * 0.5);
     ctx.closePath(); ctx.fill(); ctx.stroke();
   }
+
   // Specular on pendant
   ctx.fillStyle = "rgba(255,255,255,0.6)";
   ctx.beginPath();
@@ -412,109 +418,9 @@ function drawNecklace(ctx, g, W, H) {
   ctx.fill();
 }
 
-// ── SHIRT / JACKET ────────────────────────────────────────────
-function drawShirt(ctx, g, W, H) {
-  const cx  = W * 0.5, cy = H * 0.5;
-  const sz  = g.SZ / 100;
-  const rng = accPrng(g.VAR);
-  const rngA = accPrng(g.ACC);
-  const rngS = accPrng(g.STR);
-  const rngO = accPrng(g.ORN);
-
-  const hue = g.CLR, sat = g.SAT, lit = g.LIT;
-  const aHue = (hue + 30 + rngA() * 60) % 360;
-
-  const bodyW  = (55 + rng()  * 25) * sz;
-  const bodyH  = (65 + rngS() * 20) * sz;
-  const shouldW = bodyW * (1.15 + rngS() * 0.2);
-  const collarH = (12 + rngS() * 8)  * sz;
-  const sleeveW = (18 + rng()  * 10) * sz;
-  const sleeveH = (28 + rng()  * 18) * sz;
-
-  const topY = cy - bodyH * 0.55;
-  const botY = topY + bodyH;
-
-  // Body gradient
-  const bodyGr = _linGrad(ctx, cx - bodyW, topY, cx + bodyW, botY,
-    [[0, _hsl(hue, sat, lit + 8)], [0.35, _hsl(hue, sat, lit)], [1, _hsl(hue, sat, lit - 12)]]
-  );
-
-  // Left sleeve
-  ctx.fillStyle = bodyGr;
-  ctx.strokeStyle = _hsl(hue, sat, lit - 18);
-  ctx.lineWidth = 1.4;
-  ctx.beginPath();
-  ctx.moveTo(cx - bodyW * 0.9, topY + collarH * 0.5);
-  ctx.lineTo(cx - bodyW * 0.9 - sleeveW, topY + sleeveH);
-  ctx.lineTo(cx - bodyW * 0.7 - sleeveW, topY + sleeveH);
-  ctx.lineTo(cx - bodyW * 0.55, topY + collarH * 1.2);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  // Right sleeve
-  ctx.beginPath();
-  ctx.moveTo(cx + bodyW * 0.9, topY + collarH * 0.5);
-  ctx.lineTo(cx + bodyW * 0.9 + sleeveW, topY + sleeveH);
-  ctx.lineTo(cx + bodyW * 0.7 + sleeveW, topY + sleeveH);
-  ctx.lineTo(cx + bodyW * 0.55, topY + collarH * 1.2);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  // Main body
-  ctx.fillStyle = bodyGr;
-  ctx.beginPath();
-  ctx.moveTo(cx - shouldW, topY);
-  ctx.bezierCurveTo(cx - bodyW * 1.05, topY + bodyH * 0.25, cx - bodyW, topY + bodyH * 0.7, cx - bodyW * 0.9, botY);
-  ctx.lineTo(cx + bodyW * 0.9, botY);
-  ctx.bezierCurveTo(cx + bodyW, topY + bodyH * 0.7, cx + bodyW * 1.05, topY + bodyH * 0.25, cx + shouldW, topY);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  // Collar / V-neck
-  ctx.fillStyle = _hsl(aHue, sat + 5, lit + 6);
-  ctx.strokeStyle = _hsl(aHue, sat, lit - 15);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(cx - shouldW * 0.4, topY);
-  ctx.lineTo(cx, topY + collarH * 1.5);
-  ctx.lineTo(cx + shouldW * 0.4, topY);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  // Accent stripe or pattern
-  if (rngO() > 0.35) {
-    const stripes = 1 + Math.floor(rngO() * 3);
-    ctx.strokeStyle = _hsl(aHue, sat + 10, lit - 5, 0.55);
-    ctx.lineWidth = (2 + rngO() * 3) * sz;
-    for (let i = 0; i < stripes; i++) {
-      const sx = cx - bodyW * 0.6 + (i / stripes) * bodyW * 1.2;
-      ctx.beginPath();
-      ctx.moveTo(sx, topY + collarH * 2);
-      ctx.lineTo(sx + (rngO() - 0.5) * bodyW * 0.3, botY - bodyH * 0.08);
-      ctx.stroke();
-    }
-  }
-
-  // Buttons
-  const buttons = 2 + Math.floor(rngO() * 3);
-  for (let i = 0; i < buttons; i++) {
-    const by2 = topY + collarH * 2 + (i / (buttons - 0.5)) * (bodyH * 0.62);
-    ctx.fillStyle = _hsl(aHue, sat - 10, lit + 15);
-    ctx.strokeStyle = _hsl(hue, sat, lit - 20, 0.6);
-    ctx.lineWidth = 0.7;
-    ctx.beginPath(); ctx.arc(cx, by2, 3 * sz, 0, Math.PI * 2);
-    ctx.fill(); ctx.stroke();
-  }
-
-  // Fabric sheen
-  if (g.SHN > 20) {
-    ctx.globalAlpha = g.SHN / 250;
-    ctx.fillStyle = "white";
-    ctx.beginPath();
-    ctx.ellipse(cx - bodyW * 0.25, topY + bodyH * 0.2, bodyW * 0.18, bodyH * 0.08, -0.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-}
-
 // ── WINGS ─────────────────────────────────────────────────────
-function drawWings(ctx, g, W, H) {
+// --- Updated drawWings signature and logic ---
+function drawWings(ctx, g, W, H, opts = {}) {
   const cx  = W * 0.5, cy = H * 0.5;
   const sz  = g.SZ / 100;
   const rng = accPrng(g.VAR);
@@ -631,31 +537,38 @@ function drawWings(ctx, g, W, H) {
   drawWingSide(false);
   drawWingSide(true);
 
-  // Central attachment point
-  ctx.fillStyle   = _hsl(hue, sat - 10, lit - 8);
-  ctx.strokeStyle = _hsl(hue, sat, lit - 22);
-  ctx.lineWidth   = 1;
-  ctx.beginPath();
-  ctx.ellipse(cx, rootY, 8 * sz, 12 * sz, 0, 0, Math.PI * 2);
-  ctx.fill(); ctx.stroke();
+  // NEW: Only draw the central attachment point if NOT being worn.
+  // This allows the wings to "emerge" from the creature's torso naturally.
+  if (!opts.isWorn) {
+    const hue = g.CLR, sat = g.SAT, lit = g.LIT;
+    ctx.fillStyle   = _hsl(hue, sat - 10, lit - 8);
+    ctx.strokeStyle = _hsl(hue, sat, lit - 22);
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 5 * sz, 8 * sz, 12 * sz, 0, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+  }
 }
 
 // Dispatch table — maps template name → draw function
-const ACCESSORY_RENDERERS = { hat: drawHat, crown: drawCrown, necklace: drawNecklace, shirt: drawShirt, wings: drawWings };
+const ACCESSORY_RENDERERS = { hat: drawHat, crown: drawCrown, necklace: drawNecklace, wings: drawWings };
 
 // Master draw entry point — draws the accessory centred on the canvas
 // and optionally draws a soft selection ring around it.
+// --- Updated master entry point to pass opts ---
 function drawAccessory(ctx, template, genome, W, H, opts = {}) {
   const renderer = ACCESSORY_RENDERERS[template] || drawHat;
   ctx.clearRect(0, 0, W, H);
 
-  // Subtle canvas background gradient
-  const bg = _radGrad(ctx, W * 0.5, H * 0.5, 0, Math.max(W, H) * 0.6,
-    [[0, "rgba(30,30,30,0.6)"], [1, "rgba(10,10,10,0)"]]);
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
+  if (!opts.transparentBackground) {
+    const bg = _radGrad(ctx, W * 0.5, H * 0.5, 0, Math.max(W, H) * 0.6,
+      [[0, "rgba(30,30,30,0.6)"], [1, "rgba(10,10,10,0)"]]);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+  }
 
-  renderer(ctx, genome, W, H);
+  // Pass opts through to renderer
+  renderer(ctx, genome, W, H, opts);
 
   if (opts.selected) {
     ctx.strokeStyle = "rgba(102,187,106,0.55)";
@@ -678,7 +591,6 @@ const UNI_ACC_GLYPHS = {
   hat:      ["🎩","👒","🪖","⛑","🎓"],
   crown:    ["👑","✨","💎","⭐","🔱"],
   necklace: ["📿","💍","✦","❋","◈"],
-  shirt:    ["👕","🧥","🥼","👔","🎽"],
   wings:    ["🦋","🕊","🦅","✈","🪽"],
 };
 
@@ -702,14 +614,13 @@ function buildAccessoryUnicodeArt(template, genome) {
 
 // ============================================================
 // ACCESSORY TEMPLATES CATALOGUE
-// Static list of the 5 base templates shown in the creator UI.
+// Static list of the base templates shown in the creator UI.
 // ============================================================
 
 const ACCESSORY_TEMPLATES = [
   { id: "hat",      label: "Hat",      icon: "🎩", desc: "Classic headwear — caps, fedoras, toppers" },
   { id: "crown",    label: "Crown",    icon: "👑", desc: "Regal headpiece — crowns, tiaras, circlets" },
   { id: "necklace", label: "Necklace", icon: "📿", desc: "Neck ornament — pendants, chains, chokers"  },
-  { id: "shirt",    label: "Shirt",    icon: "👕", desc: "Body garment — vests, jackets, capes"       },
   { id: "wings",    label: "Wings",    icon: "🦋", desc: "Feathered, bat, or fairy wing pairs"        },
 ];
 
@@ -925,13 +836,23 @@ const AccessoriesView = {
 
     // ── Browse ────────────────────────────────────────────────
     async loadAccessoryList() {
-      this.listLoading = true;
+      const cacheKey = "steembiota:list:accessories:v1";
+      const canUseCache = (typeof readListCache === "function" && typeof writeListCache === "function");
+      const cachedRaw = canUseCache ? readListCache(cacheKey) : null;
+      if (cachedRaw) {
+        this.allAccessories = parseSteembiotaAccessories(cachedRaw);
+        this.listLoading = false;
+      } else {
+        this.listLoading = true;
+      }
       this.listError   = "";
       try {
         const raw = await fetchPostsByTag("steembiota", 100);
-        this.allAccessories = parseSteembiotaAccessories(Array.isArray(raw) ? raw : []);
+        const safeRaw = Array.isArray(raw) ? raw : [];
+        this.allAccessories = parseSteembiotaAccessories(safeRaw);
+        if (canUseCache) writeListCache(cacheKey, safeRaw);
       } catch (e) {
-        this.listError = e.message || "Failed to load accessories.";
+        if (!cachedRaw) this.listError = e.message || "Failed to load accessories.";
       }
       this.listLoading = false;
     },
@@ -1101,6 +1022,350 @@ const AccessoriesView = {
 };
 
 // ============================================================
+// ============================================================
+// WearPanelComponent  (v2 — per-user grants + public domain)
+//
+// Shown on the AccessoryItemView. Handles two audiences:
+//   A) Any logged-in user — can request a per-user grant, and
+//      once permitted can equip/remove the accessory on any of
+//      their creatures directly from this page.
+//   B) Accessory owner — can grant/revoke per-user permissions
+//      and toggle the accessory between private and public domain.
+//
+// Props:
+//   username       — logged-in user (or "")
+//   accAuthor      — accessory post author
+//   accPermlink    — accessory post permlink
+//   accName        — display name of the accessory
+//   permissions    — result of parseAccessoryPermissions()
+//                    { isPublic, grantedUsers, pendingRequests }
+//   isAccOwner     — true when username === effectiveOwner
+//
+// Emits:
+//   notify(msg, type)
+//   permissions-updated(newPermissions)  — after any owner action
+// ============================================================
+ 
+const WearPanelComponent = {
+  name: "WearPanelComponent",
+  props: {
+    username:    { type: String,  default: "" },
+    accAuthor:   { type: String,  required: true },
+    accPermlink: { type: String,  required: true },
+    accName:     { type: String,  default: "this accessory" },
+    permissions: {
+      type: Object,
+      default: () => ({
+        isPublic: false,
+        grantedUsers: new Set(),
+        pendingRequests: new Map(),
+        owner: ""
+      })
+    },
+    isAccOwner:  { type: Boolean, default: false },
+  },
+
+  emits: ["notify", "permissions-updated"],
+
+  data() {
+    return {
+      expanded:   false,
+      publishing: false,
+    };
+  },
+
+  computed: {
+    isPublic()        { return this.permissions?.isPublic ?? false; },
+    grantedUsers()    { return this.permissions?.grantedUsers ?? new Set(); },
+    pendingRequests() { return this.permissions?.pendingRequests ?? new Map(); },
+    owner()           { return this.permissions?.owner ?? ""; },
+
+    hasPermission() {
+      if (!this.username) return false;
+      return isWearPermitted(this.permissions, this.username);
+    },
+
+    hasPendingRequest() {
+      if (!this.username) return false;
+      return this.pendingRequests.has(this.username.trim().toLowerCase());
+    },
+
+    grantedList() { return [...this.grantedUsers]; },
+    pendingList() { return [...this.pendingRequests.keys()]; },
+  },
+
+  methods: {
+    async sendRequest() {
+      if (!window.steem_keychain) {
+        this.$emit("notify", "Steem Keychain not installed.", "error");
+        return;
+      }
+      if (!this.username) {
+        this.$emit("notify", "Please log in first.", "error");
+        return;
+      }
+
+      this.publishing = true;
+
+      publishWearRequest(
+        this.username, this.accAuthor, this.accPermlink, this.accName,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", "👗 Wear request sent!", "success");
+
+            const newPending = new Map(this.pendingRequests);
+            newPending.set(this.username.trim().toLowerCase(), { requestedAt: new Date() });
+
+            this.$emit("permissions-updated", {
+              ...this.permissions,
+              pendingRequests: newPending
+            });
+          } else {
+            this.$emit("notify", "Request failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async grantUser(grantee) {
+      if (!window.steem_keychain) return;
+
+      this.publishing = true;
+
+      publishWearGrant(
+        this.username, this.accAuthor, this.accPermlink, this.accName, grantee,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", `✅ Granted @${grantee}.`, "success");
+
+            const newGranted = new Set(this.grantedUsers);
+            const newPending = new Map(this.pendingRequests);
+
+            newGranted.add(grantee.trim().toLowerCase());
+            newPending.delete(grantee.trim().toLowerCase());
+
+            this.$emit("permissions-updated", {
+              ...this.permissions,
+              grantedUsers: newGranted,
+              pendingRequests: newPending
+            });
+          } else {
+            this.$emit("notify", "Grant failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async revokeUser(grantee) {
+      if (!window.steem_keychain) return;
+
+      this.publishing = true;
+
+      publishWearRevoke(
+        this.username, this.accAuthor, this.accPermlink, this.accName, grantee,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", `🚫 Revoked @${grantee}.`, "success");
+
+            const newGranted = new Set(this.grantedUsers);
+            const newPending = new Map(this.pendingRequests);
+
+            newGranted.delete(grantee.trim().toLowerCase());
+            newPending.delete(grantee.trim().toLowerCase());
+
+            this.$emit("permissions-updated", {
+              ...this.permissions,
+              grantedUsers: newGranted,
+              pendingRequests: newPending
+            });
+          } else {
+            this.$emit("notify", "Revoke failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async setPublic() {
+      if (!window.steem_keychain) return;
+
+      this.publishing = true;
+
+      publishWearPublic(
+        this.username, this.accAuthor, this.accPermlink, this.accName,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", "🌐 Accessory is now public domain!", "success");
+            this.$emit("permissions-updated", {
+              ...this.permissions,
+              isPublic: true
+            });
+          } else {
+            this.$emit("notify", "Failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+
+    async setPrivate() {
+      if (!window.steem_keychain) return;
+
+      this.publishing = true;
+
+      publishWearPrivate(
+        this.username, this.accAuthor, this.accPermlink, this.accName,
+        (res) => {
+          this.publishing = false;
+
+          if (res.success) {
+            this.$emit("notify", "🔒 Accessory is now private.", "success");
+            this.$emit("permissions-updated", {
+              ...this.permissions,
+              isPublic: false
+            });
+          } else {
+            this.$emit("notify", "Failed: " + (res.message || "Unknown error"), "error");
+          }
+        }
+      );
+    },
+  },
+
+  template: `
+    <div style="max-width:480px;margin:0 auto 20px;">
+
+      <!-- Header toggle -->
+      <div @click="expanded=!expanded"
+        style="display:flex;align-items:center;justify-content:space-between;
+               cursor:pointer;padding:10px 14px;border-radius:8px;
+               background:#0a0a1a;border:1px solid #1a1a3a;user-select:none;">
+        <span style="font-size:0.88rem;color:#ce93d8;font-weight:bold;">
+          👗 Wear Permissions
+          <span v-if="isPublic"
+            style="font-weight:normal;color:#a5d6a7;font-size:0.80rem;margin-left:8px;">
+            🌐 public domain
+          </span>
+          <span v-else-if="grantedList.length > 0"
+            style="font-weight:normal;color:#80cbc4;font-size:0.80rem;margin-left:8px;">
+            {{ grantedList.length }} user{{ grantedList.length===1?"":"s" }} permitted
+          </span>
+          <span v-else style="font-weight:normal;color:#555;font-size:0.80rem;margin-left:8px;">
+            private
+          </span>
+        </span>
+        <span style="color:#444;font-size:0.78rem;">{{ expanded ? "▲" : "▼" }}</span>
+      </div>
+
+      <div v-if="expanded"
+        style="border:1px solid #1a1a3a;border-top:none;border-radius:0 0 8px 8px;
+               background:#08080f;padding:14px;">
+
+        <!-- PUBLIC DOMAIN -->
+        <div v-if="isPublic"
+          style="padding:10px 12px;border-radius:6px;background:#0d1a0d;
+                 border:1px solid #2e7d32;margin-bottom:14px;">
+          <div style="font-size:0.82rem;color:#a5d6a7;font-weight:bold;margin-bottom:4px;">
+            🌐 Public Domain
+          </div>
+          <p style="font-size:0.75rem;color:#666;margin:0;line-height:1.5;">
+            Anyone may freely equip this accessory without approval.
+          </p>
+          <button v-if="isAccOwner" @click="setPrivate" :disabled="publishing"
+            style="margin-top:10px;background:#1a0a0a;color:#ff8a80;
+                   border:1px solid #3b0000;font-size:0.75rem;">
+            {{ publishing ? "…" : "🔒 Make Private" }}
+          </button>
+        </div>
+
+        <!-- PRIVATE MODE -->
+        <template v-else>
+
+          <!-- Owner toggle -->
+          <div v-if="isAccOwner"
+            style="margin-bottom:14px;padding:10px 12px;border-radius:6px;
+                   background:#0a0a12;border:1px solid #1a1a2e;">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:8px;">
+              🔒 Private — only users you grant below may wear this.
+            </div>
+            <button @click="setPublic" :disabled="publishing"
+              style="background:#0d1a0d;color:#a5d6a7;border:1px solid #2e7d32;font-size:0.75rem;">
+              {{ publishing ? "…" : "🌐 Make Public Domain" }}
+            </button>
+          </div>
+
+          <!-- Request -->
+          <div v-if="!isAccOwner && username && !hasPermission && !hasPendingRequest"
+            style="margin-bottom:14px;text-align:center;">
+            <p style="font-size:0.75rem;color:#555;margin-bottom:8px;">
+              Request permission to wear this.
+            </p>
+            <button @click="sendRequest" :disabled="publishing"
+              style="background:#1a0a2e;color:#ce93d8;border:1px solid #7b1fa2;">
+              👗 Request Permission
+            </button>
+          </div>
+
+          <!-- Already permitted -->
+          <div v-if="!isAccOwner && hasPermission"
+            style="margin-bottom:14px;padding:8px;border:1px solid #2e7d32;background:#0d1a0d;">
+            <span style="color:#a5d6a7;">✅ You have permission.</span>
+          </div>
+
+          <!-- Pending -->
+          <div v-if="!isAccOwner && hasPendingRequest && !hasPermission"
+            style="margin-bottom:14px;padding:8px;border:1px solid #3a2800;background:#1a1200;">
+            <span style="color:#ffb74d;">⏳ Pending approval.</span>
+          </div>
+
+        </template>
+
+        <!-- Pending requests -->
+        <template v-if="isAccOwner && pendingList.length > 0">
+          <div style="color:#ce93d8;margin-bottom:8px;">
+            Pending Requests ({{ pendingList.length }})
+          </div>
+
+          <div v-for="user in pendingList" :key="'req-'+user"
+            style="display:flex;justify-content:space-between;padding:6px 0;">
+            <span>@{{ user }}</span>
+
+            <div v-if="user !== owner" style="display:flex;gap:6px;">
+              <button @click="grantUser(user)">✅</button>
+              <button @click="revokeUser(user)">❌</button>
+            </div>
+
+            <span v-else style="color:#444;">Owner</span>
+          </div>
+        </template>
+
+        <!-- Granted -->
+        <template v-if="isAccOwner && grantedList.length > 0">
+          <div style="color:#80cbc4;margin-top:10px;">
+            Permitted Users ({{ grantedList.length }})
+          </div>
+
+          <div v-for="user in grantedList" :key="'grant-'+user"
+            style="display:flex;justify-content:space-between;padding:6px 0;">
+            <span>@{{ user }}</span>
+
+            <button v-if="user !== owner" @click="revokeUser(user)">🚫</button>
+            <span v-else style="color:#444;">Owner</span>
+          </div>
+        </template>
+
+      </div>
+    </div>
+  `
+};
+
+// ============================================================
 // AccessoryItemView  — route /@:author/:permlink (accessory posts)
 //
 // Detected by CreatureView when json_metadata.steembiota.type === "accessory".
@@ -1111,7 +1376,7 @@ const AccessoriesView = {
 const AccessoryItemView = {
   name: "AccessoryItemView",
   inject: ["username", "notify"],
-  components: { AccessoryCanvasComponent, LoadingSpinnerComponent },
+  components: { AccessoryCanvasComponent, LoadingSpinnerComponent, WearPanelComponent },
 
   data() {
     return {
@@ -1134,6 +1399,8 @@ const AccessoryItemView = {
       recipientInput:    "",
       transferPublishing: false,
       urlCopied:         false,
+      // Wear permissions (v2: per-user grants + public domain)
+      permissions: { isPublic: false, grantedUsers: new Set(), pendingRequests: new Map() },
     };
   },
 
@@ -1191,6 +1458,9 @@ const AccessoryItemView = {
         const ownership     = parseOwnershipChain(replies, author);
         this.transferState  = ownership;
         this.effectiveOwner = ownership.effectiveOwner;
+
+        // Permission state — who is allowed to wear this accessory.
+        this.permissions = parseAccessoryPermissions(replies, author);
 
       } catch (err) {
         this.loadError = err.message || "Failed to load accessory.";
@@ -1442,6 +1712,18 @@ const AccessoryItemView = {
           </div>
         </div>
 
+        <!-- Wear permissions panel — visible to all logged-in users -->
+        <wear-panel-component
+          :username="username"
+          :acc-author="author"
+          :acc-permlink="permlink"
+          :acc-name="accName"
+          :permissions="permissions"
+          :is-acc-owner="isOwner"
+          @notify="(msg,type) => notify(msg,type)"
+          @permissions-updated="p => { permissions = p; }"
+        ></wear-panel-component>
+
         <!-- Social bar -->
         <div style="max-width:480px;margin:0 auto 16px;display:flex;gap:14px;
                     align-items:center;justify-content:center;font-size:0.78rem;color:#666;">
@@ -1472,6 +1754,7 @@ const AccessoryItemView = {
     </div>
   `
 };
+
 
 // Filters raw Steem posts down to accessory posts, newest first.
 // NOTE: effectiveOwner after transfers is NOT derived here — doing a
