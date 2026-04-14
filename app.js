@@ -3539,7 +3539,6 @@ const NotificationsView = {
   `
 };
 
-
 const routes = [
   { path: "/",                                      component: HomeView          },
   { path: "/accessories",                           component: AccessoriesView   },
@@ -3549,6 +3548,7 @@ const routes = [
   { path: "/@:author/:permlink",  name: "CreatureView",     component: CreatureView      },
   { path: "/acc/@:author/:permlink", name: "AccessoryItemView", component: AccessoryItemView },
   { path: "/@:user",              component: ProfileView       },
+  { path: "/upload", component: UploadView },
 ];
 
 const router = createRouter({
@@ -3749,6 +3749,7 @@ const App = {
     <nav>
       <router-link to="/"            exact-active-class="nav-active">Home</router-link>
       <router-link to="/accessories" exact-active-class="nav-active">✨ Accessories</router-link>
+      <router-link v-if="username" to="/upload" exact-active-class="nav-active">📸 Upload</router-link>
       <router-link
         v-if="username"
         :to="'/@' + username"
@@ -3846,6 +3847,7 @@ vueApp.component("GlobalProfileBannerComponent", GlobalProfileBannerComponent);
 vueApp.component("ActivityPanelComponent",      ActivityPanelComponent);
 vueApp.component("CreatureView",                CreatureView);
 vueApp.component("LeaderboardView",             LeaderboardView);
+vueApp.component("UploadView", UploadView);
 
 vueApp.use(router);
 vueApp.mount("#app");
