@@ -51,7 +51,13 @@ function samplePixels(img) {
   canvas.height = SAMPLE_SIZE;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
-  return ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data;
+  const data = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data;
+  // Release the GPU backing store immediately — the canvas is never attached
+  // to the DOM but the browser still holds a texture allocation until we
+  // zero the dimensions or drop all references.
+  canvas.width = 0;
+  canvas.height = 0;
+  return data;
 }
 
 /**
@@ -71,6 +77,22 @@ function rgbToHsl(r, g, b) {
   else if (max === g) h = (b - r) / d + 2;
   else                h = (r - g) / d + 4;
   return { h: Math.round(h * 60), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+/**
+ * Generates a stable 32-bit hash from the pixel data (FNV-1a, 32-bit).
+ * Placed here with the other pure pixel helpers so it is always defined
+ * before imageToGenome, which calls it.  (Function declarations are hoisted
+ * by JS, but this ordering avoids the pitfall if the file is ever converted
+ * to ES module syntax where hoisting does not apply.)
+ */
+function hashPixels(data) {
+  let h = 0x811c9dc5; // FNV offset basis
+  for (let i = 0; i < data.length; i++) {
+    h ^= data[i];
+    h = Math.imul(h, 0x01000193); // FNV prime
+  }
+  return h >>> 0;
 }
 
 /**
@@ -205,9 +227,11 @@ function hueDist(a, b) {
  *   GEN % 8 === paletteIndex
  * We pick a GEN that also incorporates some randomness for variety.
  *
+ * Now accepts an rng function for deterministic selection.
+ *
  * Returns { GEN, CLR }.
  */
-function fitHue(targetHue) {
+function fitHue(targetHue, rng) {
   let bestGen = 0, bestClr = 0, bestDist = Infinity;
 
   for (let pi = 0; pi < PALETTES.length; pi++) {
@@ -219,8 +243,9 @@ function fitHue(targetHue) {
     if (dist < bestDist) {
       bestDist = dist;
       bestClr  = clr;
-      // Pick a random GEN in [0,999] that maps to this palette index
-      const base_gen = pi + Math.floor(Math.random() * 125) * 8;
+
+      // Pick a GEN in [0,999] that maps to this palette index using rng()
+      const base_gen = pi + Math.floor(rng() * 125) * 8;
       bestGen = Math.min(999, base_gen);
     }
   }
@@ -260,20 +285,26 @@ function morAspectRatio(mor) {
  * Search the MOR space [0, 9999] for the value whose rendered body
  * aspect ratio is closest to targetRatio.
  *
+ * bodyLen and bodyH are both drawn from the same MOR-seeded PRNG, so they
+ * are correlated — the true achievable aspect-ratio space is not a simple
+ * Cartesian product of [80,110] × [42,60] and cannot be described by a
+ * pair of analytical min/max constants.  We therefore skip the pre-clamp
+ * entirely and let the full coarse+fine scan find the closest achievable
+ * value directly.  The search already returns the best match for any input,
+ * even targets outside the achievable range, so the clamp was only masking
+ * edge cases without improving accuracy.
+ *
  * Uses a coarse scan (every 37 steps ≈ 270 probes) then refines
- * around the best candidate. Runs in < 1ms in all modern browsers.
+ * around the best candidate.  Runs in < 1 ms in all modern browsers.
  *
  * Returns MOR integer.
  */
 function fitMor(targetRatio) {
-  // Clamp to the achievable range: min=80/60=1.33, max=110/42=2.62
-  const clamped = Math.max(1.33, Math.min(2.62, targetRatio));
-
   let bestMor = 0, bestDist = Infinity;
 
   // Coarse scan
   for (let m = 0; m < 10000; m += 37) {
-    const dist = Math.abs(morAspectRatio(m) - clamped);
+    const dist = Math.abs(morAspectRatio(m) - targetRatio);
     if (dist < bestDist) { bestDist = dist; bestMor = m; }
   }
 
@@ -281,7 +312,7 @@ function fitMor(targetRatio) {
   const lo = Math.max(0, bestMor - 200);
   const hi = Math.min(9999, bestMor + 200);
   for (let m = lo; m <= hi; m++) {
-    const dist = Math.abs(morAspectRatio(m) - clamped);
+    const dist = Math.abs(morAspectRatio(m) - targetRatio);
     if (dist < bestDist) { bestDist = dist; bestMor = m; }
   }
 
@@ -290,53 +321,88 @@ function fitMor(targetRatio) {
 
 /**
  * Map edge density (0–1) to APP seed.
- * High edge density → higher APP (more varied appendages, potentially wings).
+ * High edge density → higher APP (more varied appendages, e.g., complex ears/wings).
  * APP is in [0, 9999].
+ *
+ * Now accepts an rng function for deterministic jitter.
  */
-function fitApp(edgeDensity) {
-  // Linear map: 0 edge → APP near 0; max edge → APP near 9999
-  // Add random jitter (±1500) so two images with the same density
-  // don't always produce identical appendages.
-  const base  = Math.round(edgeDensity * 9999);
-  const jitter = Math.floor(Math.random() * 3000) - 1500;
+function fitApp(edgeDensity, rng) {
+  // Linear mapping to full range
+  const base = Math.round(edgeDensity * 9999);
+
+  // Slightly reduced jitter for more stability while still allowing variation
+  const jitter = Math.floor(rng() * 2000) - 1000;
+
   return Math.max(0, Math.min(9999, base + jitter));
 }
 
 /**
- * Map colourfulness + litVariance to ORN seed.
- * Colourful, high-contrast images → more ornamental creatures.
+ * Map colourfulness + litVariance + edgeDensity to ORN seed.
+ * High colourfulness + contrast + detail → richer ornamentation / fur texture.
+ *
+ * Now accepts an rng function for deterministic jitter.
+ *
+ * The jitter is scaled to the available headroom on each side so it always
+ * has real effect even when the base lands near 0 or 9999.  Without this,
+ * a near-monochromatic or near-fully-saturated image produces a base close
+ * to a boundary, the ±500 jitter is entirely clamped away, and every such
+ * image maps to the same ORN value — reducing ornament diversity.
  */
-function fitOrn(colourfulness, litVariance) {
-  // litVariance peaks around ~800 for high-contrast, ~0 for flat
+function fitOrn(colourfulness, litVariance, edgeDensity, rng) {
+  // Normalize lighting variance (~0–800 → 0–1)
   const normLit = Math.min(litVariance / 800, 1.0);
-  const base    = Math.round((colourfulness * 0.6 + normLit * 0.4) * 9999);
-  const jitter  = Math.floor(Math.random() * 2000) - 1000;
+
+  // Blend edge detail + contrast into a texture driver
+  const textureScore = (edgeDensity * 0.7) + (normLit * 0.3);
+
+  // Final weighted combination
+  const base = Math.round(
+    (colourfulness * 0.4 + textureScore * 0.6) * 9999
+  );
+
+  // Scale the maximum jitter to the smaller of the two headroom values so the
+  // shifted result is always within [0, 9999] and the full ±range is usable.
+  const maxJitter = Math.min(base, 9999 - base, 500);
+  const jitter = Math.floor(rng() * (maxJitter * 2 + 1)) - maxJitter;
+
   return Math.max(0, Math.min(9999, base + jitter));
 }
 
 /**
- * Full image-to-genome conversion.
+ * Full image-to-genome conversion (deterministic with reroll support).
  *
  * @param {HTMLImageElement} img  — decoded image element
+ * @param {number} rerollIndex    — optional reroll seed modifier
  * @returns {object} genome       — valid SteemBiota genome object
  */
-function imageToGenome(img) {
+function imageToGenome(img, rerollIndex = 0) {
   const data  = samplePixels(img);
   const stats = analysePixels(data, img.naturalWidth, img.naturalHeight);
 
-  const { GEN, CLR } = fitHue(stats.dominantHue);
-  const MOR           = fitMor(stats.aspectRatio);
-  const APP           = fitApp(stats.edgeDensity);
-  const ORN           = fitOrn(stats.colourfulness, stats.litVariance);
+  // Create deterministic seed from pixel hash + reroll index
+  const pixelHash = hashPixels(data);
+  const masterSeed = (pixelHash ^ rerollIndex) >>> 0;
+  const rng = makePrngFit(masterSeed);
 
-  // Randomise lifespan and fertility (these have no image correspondence)
-  const LIF       = 80 + Math.floor(Math.random() * 80);
-  const FRT_START = Math.min(20 + Math.floor(Math.random() * 20), LIF - 10);
-  const FRT_END   = Math.min(60 + Math.floor(Math.random() * 20), LIF - 1);
+  // Deterministic gene fitting using shared RNG stream
+  const { GEN, CLR } = fitHue(stats.dominantHue, rng);
+  const MOR           = fitMor(stats.aspectRatio); // already deterministic
+  const APP           = fitApp(stats.edgeDensity, rng);
+  const ORN           = fitOrn(
+    stats.colourfulness,
+    stats.litVariance,
+    stats.edgeDensity,
+    rng
+  );
+
+  // Deterministic lifespan and fertility
+  const LIF       = 80 + Math.floor(rng() * 80);
+  const FRT_START = Math.min(20 + Math.floor(rng() * 20), LIF - 10);
+  const FRT_END   = Math.min(60 + Math.floor(rng() * 20), LIF - 1);
 
   return {
     GEN,
-    SX:  Math.floor(Math.random() * 2),
+    SX: Math.floor(rng() * 2),
     MOR,
     APP,
     ORN,
@@ -344,7 +410,7 @@ function imageToGenome(img) {
     LIF,
     FRT_START,
     FRT_END,
-    MUT: Math.floor(Math.random() * 3),
+    MUT: Math.floor(rng() * 3),
     // Provenance tag — not used by renderer but visible in genome table
     _source: "image-upload"
   };
@@ -360,197 +426,209 @@ const UploadView = {
   inject: ["username", "hasKeychain", "notify"],
   components: { CreatureCanvasComponent },
 
-  data() {
-    return {
-      // Step management: "pick" | "analyse" | "preview" | "published"
-      step:          "pick",
+data() {
+  return {
+    // Step management: "pick" | "analyse" | "preview" | "published"
+    step:          "pick",
 
-      // Image state
-      imageFile:     null,
-      imageDataUrl:  null,    // for <img> preview
-      imageEl:       null,    // decoded HTMLImageElement
-      analysisError: "",
+    // Image state
+    imageFile:     null,
+    imageDataUrl:  null,    // for <img> preview
+    imageEl:       null,    // decoded HTMLImageElement
+    analysisError: "",
 
-      // Derived genome + render inputs
-      genome:        null,
-      imageStats:    null,    // raw stats from analysePixels()
-      facingRight:   false,
-      unicodeArt:    "",
-      customTitle:   "",
-      genusInput:    "",      // optional genus override (0–999)
+    // Derived genome + render inputs
+    genome:        null,
+    imageStats:    null,    // raw stats from analysePixels()
+    facingRight:   false,
+    unicodeArt:    "",
+    customTitle:   "",
+    genusInput:    "",      // optional genus override (0–999)
 
-      // Publishing
-      publishing:    false,
+    // Publishing
+    publishing:    false,
 
-      // Drag state
-      isDragging:    false,
-    };
-  },
+    // Drag state
+    isDragging:    false,
+
+    // NEW: reroll tracking
+    rerollIndex:   0,
+  };
+},
 
   computed: {
-    creatureName()  { return this.genome ? generateFullName(this.genome) : ""; },
-    genusName()     { return this.genome ? generateGenusName(this.genome.GEN) : ""; },
-    sexLabel()      { return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : ""; },
-    lifecycleStage(){ return this.genome ? getLifecycleStage(0, this.genome) : null; },
-    canPublish()    { return !!this.username && !!this.genome && !!window.steem_keychain && !this.publishing; },
-    genusInputValid() {
-      if (this.genusInput === "") return true;
-      const n = Number(this.genusInput);
-      return Number.isInteger(n) && n >= 0 && n <= 999;
-    },
-    statRows() {
-      if (!this.imageStats) return [];
-      const s = this.imageStats;
-      return [
-        { label: "Dominant hue",   value: s.dominantHue + "°",           desc: "→ CLR / GEN palette" },
-        { label: "Mean saturation",value: s.meanSat + "%",                desc: "→ colour richness" },
-        { label: "Mean lightness", value: s.meanLit.toFixed(1) + "%",     desc: "→ shade" },
-        { label: "Contrast",       value: s.litVariance.toFixed(0),        desc: "→ ORN ornament seed" },
-        { label: "Edge density",   value: (s.edgeDensity * 100).toFixed(1) + "%", desc: "→ APP appendage seed" },
-        { label: "Colourfulness",  value: (s.colourfulness * 100).toFixed(1) + "%", desc: "→ ORN ornament seed" },
-        { label: "Aspect ratio",   value: s.aspectRatio.toFixed(2),        desc: "→ MOR body shape" },
-      ];
-    }
+  creatureName()  { return this.genome ? generateFullName(this.genome) : ""; },
+  genusName()     { return this.genome ? generateGenusName(this.genome.GEN) : ""; },
+  sexLabel()      { return this.genome ? (this.genome.SX === 0 ? "♂ Male" : "♀ Female") : ""; },
+  lifecycleStage(){ return this.genome ? getLifecycleStage(0, this.genome) : null; },
+  canPublish()    { return !!this.username && !!this.genome && !!window.steem_keychain && !this.publishing; },
+  genusInputValid() {
+    if (this.genusInput === "") return true;
+    const n = Number(this.genusInput);
+    return Number.isInteger(n) && n >= 0 && n <= 999;
+  },
+  statRows() {
+    if (!this.imageStats) return [];
+    const s = this.imageStats;
+    return [
+      { label: "Dominant hue",   value: s.dominantHue + "°",                 desc: "→ CLR / GEN palette" },
+      { label: "Mean saturation",value: s.meanSat + "%",                      desc: "→ colour richness" },
+      { label: "Mean lightness", value: s.meanLit.toFixed(1) + "%",           desc: "→ shade" },
+      { label: "Contrast",       value: s.litVariance.toFixed(0),             desc: "→ Fur texture" }, // UPDATED
+      { label: "Edge density",   value: (s.edgeDensity * 100).toFixed(1) + "%", desc: "→ Ear & Tail styles" }, // UPDATED
+      { label: "Colourfulness",  value: (s.colourfulness * 100).toFixed(1) + "%", desc: "→ ORN ornament seed" },
+      { label: "Aspect ratio",   value: s.aspectRatio.toFixed(2),             desc: "→ Body shape" }, // UPDATED
+    ];
+  }
+},
+
+methods: {
+  // ----------------------------------------------------------
+  // File input handling
+  // ----------------------------------------------------------
+  onFileInputChange(e) {
+    const file = e.target.files && e.target.files[0];
+    if (file) this.startAnalysis(file);
   },
 
-  methods: {
-    // ----------------------------------------------------------
-    // File input handling
-    // ----------------------------------------------------------
-    onFileInputChange(e) {
-      const file = e.target.files && e.target.files[0];
-      if (file) this.startAnalysis(file);
-    },
+  onDrop(e) {
+    e.preventDefault();
+    this.isDragging = false;
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) this.startAnalysis(file);
+  },
 
-    onDrop(e) {
-      e.preventDefault();
-      this.isDragging = false;
-      const file = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (file && file.type.startsWith("image/")) this.startAnalysis(file);
-    },
+  onDragOver(e) { e.preventDefault(); this.isDragging = true; },
+  onDragLeave()  { this.isDragging = false; },
 
-    onDragOver(e) { e.preventDefault(); this.isDragging = true; },
-    onDragLeave()  { this.isDragging = false; },
+  triggerFileInput() { this.$refs.fileInput.click(); },
 
-    triggerFileInput() { this.$refs.fileInput.click(); },
+  // ----------------------------------------------------------
+  // Core analysis pipeline
+  // ----------------------------------------------------------
+  async startAnalysis(file) {
+    this.rerollIndex  = 0; // NEW: reset reroll index
+    this.imageFile    = file;
+    this.analysisError = "";
+    this.genome       = null;
+    this.imageStats   = null;
+    this.step         = "analyse";
 
-    // ----------------------------------------------------------
-    // Core analysis pipeline
-    // ----------------------------------------------------------
-    async startAnalysis(file) {
-      this.imageFile    = file;
-      this.analysisError = "";
-      this.genome       = null;
-      this.imageStats   = null;
-      this.step         = "analyse";
+    // Show image preview immediately
+    const reader = new FileReader();
+    reader.onload = e => { this.imageDataUrl = e.target.result; };
+    reader.readAsDataURL(file);
 
-      // Show image preview immediately
-      const reader = new FileReader();
-      reader.onload = e => { this.imageDataUrl = e.target.result; };
-      reader.readAsDataURL(file);
+    try {
+      const img      = await loadImageFile(file);
+      this.imageEl   = img;
 
-      try {
-        const img      = await loadImageFile(file);
-        this.imageEl   = img;
+      // Run analysis on next tick so the UI shows "analysing…" first
+      await new Promise(r => setTimeout(r, 40));
 
-        // Run analysis on next tick so the UI shows "analysing…" first
-        await new Promise(r => setTimeout(r, 40));
+      const data   = samplePixels(img);
+      const stats  = analysePixels(data, img.naturalWidth, img.naturalHeight);
+      this.imageStats = stats;
 
-        const data   = samplePixels(img);
-        const stats  = analysePixels(data, img.naturalWidth, img.naturalHeight);
-        this.imageStats = stats;
+      // UPDATED: pass rerollIndex
+      const genome = imageToGenome(img, this.rerollIndex);
 
-        const genome = imageToGenome(img);
-
-        // Apply genus override if provided
-        if (this.genusInput !== "" && this.genusInputValid) {
-          genome.GEN = Number(this.genusInput);
-        }
-
-        this.genome      = genome;
-        this.facingRight = Math.random() < 0.5;
-        this.unicodeArt  = buildUnicodeArt(genome, 0, null, this.facingRight, "standing");
-        this.customTitle = buildDefaultTitle(generateFullName(genome), new Date());
-        this.step        = "preview";
-      } catch (err) {
-        this.analysisError = err.message || "Failed to analyse image.";
-        this.step = "pick";
-      }
-    },
-
-    // ----------------------------------------------------------
-    // Reroll — regenerate genome keeping the same image
-    // ----------------------------------------------------------
-    reroll() {
-      if (!this.imageEl) return;
-      const genome = imageToGenome(this.imageEl);
+      // Apply genus override if provided
       if (this.genusInput !== "" && this.genusInputValid) {
         genome.GEN = Number(this.genusInput);
       }
+
       this.genome      = genome;
+      this.facingRight = Math.random() < 0.5;
       this.unicodeArt  = buildUnicodeArt(genome, 0, null, this.facingRight, "standing");
       this.customTitle = buildDefaultTitle(generateFullName(genome), new Date());
-    },
-
-    // ----------------------------------------------------------
-    // Publish
-    // ----------------------------------------------------------
-    async publish() {
-      if (!this.canPublish) return;
-      if (!this.genusInputValid) {
-        this.notify("Genus must be a whole number from 0 to 999.", "error");
-        return;
-      }
-      this.publishing = true;
-      publishCreature(
-        this.username,
-        this.genome,
-        this.unicodeArt,
-        this.creatureName,
-        0,
-        this.lifecycleStage.name,
-        this.customTitle,
-        this.genusName,
-        (response) => {
-          this.publishing = false;
-          if (response.success) {
-            invalidateGlobalListCaches();
-            invalidateOwnedCachesForUser(this.username);
-            this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
-            this.$router.push("/@" + this.username + "/" + response.permlink);
-          } else {
-            this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
-          }
-        }
-      );
-    },
-
-    // ----------------------------------------------------------
-    // Reset back to image picker
-    // ----------------------------------------------------------
-    reset() {
-      this.step          = "pick";
-      this.imageFile     = null;
-      this.imageDataUrl  = null;
-      this.imageEl       = null;
-      this.genome        = null;
-      this.imageStats    = null;
-      this.analysisError = "";
-      this.genusInput    = "";
-      if (this.$refs.fileInput) this.$refs.fileInput.value = "";
-    },
-
-    onFacingResolved(dir) {
-      this.facingRight = dir;
-      if (this.genome) {
-        this.unicodeArt = buildUnicodeArt(this.genome, 0, null, dir, "standing");
-      }
-    },
-
-    hueSwatchStyle(hue) {
-      return `background: hsl(${hue}, 60%, 55%); width:16px; height:16px; border-radius:50%; display:inline-block; vertical-align:middle; margin-right:6px; flex-shrink:0;`;
-    },
+      this.step        = "preview";
+    } catch (err) {
+      this.analysisError = err.message || "Failed to analyse image.";
+      this.step = "pick";
+    }
   },
+
+  // ----------------------------------------------------------
+  // Reroll — regenerate genome keeping the same image
+  // ----------------------------------------------------------
+  reroll() {
+    if (!this.imageEl) return;
+
+    this.rerollIndex++; // NEW: increment index
+
+    // UPDATED: pass rerollIndex
+    const genome = imageToGenome(this.imageEl, this.rerollIndex);
+
+    if (this.genusInput !== "" && this.genusInputValid) {
+      genome.GEN = Number(this.genusInput);
+    }
+
+    this.genome      = genome;
+    this.unicodeArt  = buildUnicodeArt(genome, 0, null, this.facingRight, "standing");
+    this.customTitle = buildDefaultTitle(generateFullName(genome), new Date());
+  },
+
+  // ----------------------------------------------------------
+  // Publish
+  // ----------------------------------------------------------
+  async publish() {
+    if (!this.canPublish) return;
+    if (!this.genusInputValid) {
+      this.notify("Genus must be a whole number from 0 to 999.", "error");
+      return;
+    }
+    this.publishing = true;
+    publishCreature(
+      this.username,
+      this.genome,
+      this.unicodeArt,
+      this.creatureName,
+      0,
+      this.lifecycleStage.name,
+      this.customTitle,
+      this.genusName,
+      (response) => {
+        this.publishing = false;
+        if (response.success) {
+          invalidateGlobalListCaches();
+          invalidateOwnedCachesForUser(this.username);
+          this.notify("🌿 " + this.creatureName + " published to the blockchain!", "success");
+          this.$router.push("/@" + this.username + "/" + response.permlink);
+        } else {
+          this.notify("Publish failed: " + (response.message || "Unknown error"), "error");
+        }
+      }
+    );
+  },
+
+  // ----------------------------------------------------------
+  // Reset back to image picker
+  // ----------------------------------------------------------
+  reset() {
+    this.step          = "pick";
+    this.imageFile     = null;
+    this.imageDataUrl  = null;
+    this.imageEl       = null;
+    this.genome        = null;
+    this.imageStats    = null;
+    this.analysisError = "";
+    this.genusInput    = "";
+    this.rerollIndex   = 0; // OPTIONAL: reset here too
+    if (this.$refs.fileInput) this.$refs.fileInput.value = "";
+  },
+
+  onFacingResolved(dir) {
+    this.facingRight = dir;
+    if (this.genome) {
+      this.unicodeArt = buildUnicodeArt(this.genome, 0, null, dir, "standing");
+    }
+  },
+
+  hueSwatchStyle(hue) {
+    return `background: hsl(${hue}, 60%, 55%); width:16px; height:16px; border-radius:50%; display:inline-block; vertical-align:middle; margin-right:6px; flex-shrink:0;`;
+  },
+},
 
   template: `
     <div style="margin-top:20px;padding:0 16px 60px;max-width:700px;margin-left:auto;margin-right:auto;">
@@ -816,3 +894,5 @@ const UploadView = {
     </div>
   `
 };
+
+
