@@ -1939,84 +1939,59 @@ async function fetchNotificationsForUser(username, limit = 50) {
 async function fetchCreaturesOwnedBy(username, limit = 100) {
   if (!username) return [];
   const results = [];
+  const norm = v => String(v || '').trim().toLowerCase();
 
-  // ── Own posts (fast path) ──────────────────────────────────
-  // fetchPostsByUser uses getDiscussionsByBlog which includes resteems.
-  // Filter strictly to posts authored by the user that have a creature genome.
-  // Accessory posts (type:"accessory") do NOT have a genome field so they
-  // are naturally excluded by the meta.steembiota?.genome check.
-  try {
-    const raw = await fetchPostsByUser(username, limit);
-    const ownCreaturePosts = (Array.isArray(raw) ? raw : []).filter(p => {
-      if (p.author !== username) return false;  // skip resteems
-      try {
-        const m = JSON.parse(p.json_metadata || '{}');
-        return !!(m.steembiota?.genome);         // creatures only
-      } catch { return false; }
-    });
+  // Helper to process a post for ownership + wearing state
+  const processPost = async (p) => {
+    let meta = {};
+    try { meta = JSON.parse(p.json_metadata || '{}'); } catch { return; }
 
-    await _throttledMap(ownCreaturePosts, 5, async (p) => {
-      let meta = {};
-      try { meta = JSON.parse(p.json_metadata || '{}'); } catch { return; }
-      if (Number(p.children || 0) <= 0) {
-        results.push({ post: p, meta: meta.steembiota, effectiveOwner: p.author });
-        return;
-      }
+    // Ensure this is a creature (has genome)
+    if (!meta.steembiota?.genome) return;
 
+    let effectiveOwner = p.author;
+    let currentlyWearing = [];
+
+    // Only process replies if they exist
+    if (Number(p.children || 0) > 0) {
       let replies = [];
       try { replies = await fetchAllReplies(p.author, p.permlink); } catch {}
 
-      const hasTransferReplies = replies.some(r => {
-        try {
-          const m = JSON.parse(r.json_metadata || '{}');
-          return ['transfer_offer','transfer_accept','transfer_cancel']
-            .includes(m.steembiota?.type);
-        } catch { return false; }
+      // Ownership resolution
+      const chain = parseOwnershipChain(replies, p.author);
+      effectiveOwner = chain.effectiveOwner;
+
+      // Wearing state extraction (optimized)
+      const equippedMap = parseEquippedAccessories(replies, p.author);
+      currentlyWearing = [...equippedMap.values()].map(a => ({
+        accAuthor: a.accAuthor,
+        accPermlink: a.accPermlink
+      }));
+    }
+
+    // Only include if owned by target user
+    if (norm(effectiveOwner) === norm(username)) {
+      results.push({
+        post: p,
+        meta: meta.steembiota,
+        effectiveOwner,
+        wearing: currentlyWearing
       });
+    }
+  };
 
-      const effectiveOwner = hasTransferReplies
-        ? parseOwnershipChain(replies, p.author).effectiveOwner
-        : p.author;
-
-      if (effectiveOwner === username) {
-        results.push({ post: p, meta: meta.steembiota, effectiveOwner });
-      }
-    });
+  // ── Own posts (fast path) ──────────────────────────────────
+  try {
+    const blog = await fetchPostsByUser(username, limit);
+    const authored = (Array.isArray(blog) ? blog : []).filter(p => p.author === username);
+    await _throttledMap(authored, 5, processPost);
   } catch { /* non-fatal */ }
 
-  // ── Incoming transfers (creatures authored by others) ──────
+  // ── Incoming transfers (from others) ───────────────────────
   try {
     const tagPosts = await fetchPostsByTag('steembiota', 100);
-    const foreignCreaturePosts = (Array.isArray(tagPosts) ? tagPosts : []).filter(p => {
-      if (p.author === username) return false;
-      try {
-        const m = JSON.parse(p.json_metadata || '{}');
-        return !!(m.steembiota?.genome);  // creatures only, excludes accessories
-      } catch { return false; }
-    });
-
-    await _throttledMap(foreignCreaturePosts, 5, async (p) => {
-      if (Number(p.children || 0) <= 0) return;
-      let meta = {};
-      try { meta = JSON.parse(p.json_metadata || '{}'); } catch { return; }
-
-      let replies = [];
-      try { replies = await fetchAllReplies(p.author, p.permlink); } catch { return; }
-
-      const hasTransferReplies = replies.some(r => {
-        try {
-          const m = JSON.parse(r.json_metadata || '{}');
-          return ['transfer_offer','transfer_accept','transfer_cancel']
-            .includes(m.steembiota?.type);
-        } catch { return false; }
-      });
-      if (!hasTransferReplies) return;
-
-      const chain = parseOwnershipChain(replies, p.author);
-      if (chain.effectiveOwner === username) {
-        results.push({ post: p, meta: meta.steembiota, effectiveOwner: username });
-      }
-    });
+    const foreign = (Array.isArray(tagPosts) ? tagPosts : []).filter(p => p.author !== username);
+    await _throttledMap(foreign, 5, processPost);
   } catch { /* non-fatal */ }
 
   return results;
@@ -2490,17 +2465,86 @@ async function fetchCreatureWearing(creatureAuthor, creaturePermlink, creatureRe
  * Returns the name of the creature if found, otherwise null.
  */
 async function findCreatureWearingAccessory(username, accAuthor, accPermlink) {
-  const ownedCreatures = await fetchCreaturesOwnedBy(username);
-  const targetKey = `${accAuthor.toLowerCase()}/${accPermlink.toLowerCase()}`;
+  // Use the cached owned creatures list (which now contains 'wearing' arrays)
+  // This avoids re-fetching replies for every single creature.
+  const cacheKey = `steembiota:owned:creatures:${String(username).toLowerCase()}:v2`;
+  let owned = readOwnedProfileCache(cacheKey);
+  
+  if (!owned) {
+    // Fallback if cache is empty (legacy behavior path)
+    owned = await fetchCreaturesOwnedBy(username);
+  }
 
-  for (const c of ownedCreatures) {
-    // We need to fetch the replies for each creature to see the current wear state
-    const replies = await fetchAllReplies(c.post.author, c.post.permlink);
-    const equipped = parseEquippedAccessories(replies, c.post.author);
+  const targetKey = norm(`${accAuthor}/${accPermlink}`);
+
+  for (const c of owned) {
+    if (!c.wearing) continue;
+
+    const isWearing = c.wearing.some(w => 
+      norm(`${w.accAuthor}/${w.accPermlink}`) === targetKey
+    );
     
-    if (equipped.has(targetKey)) {
-      return c.meta.name || c.post.author;
+    if (isWearing) {
+      return (c.meta && c.meta.name) ? c.meta.name : c.post.author;
     }
   }
   return null;
+}
+
+function norm(s) {
+  return String(s || "").toLowerCase().trim();
+}
+
+// ============================================================
+// INDEXEDDB CACHE (Persistence for large creature data)
+// ============================================================
+const DB_NAME = "SteemBiotaDB";
+const DB_VERSION = 1;
+const STORE_CREATURES = "creature_pages";
+
+function openSBDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_CREATURES)) {
+        db.createObjectStore(STORE_CREATURES, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function writeCreatureDB(key, data, ttlMs = 600000) {
+  try {
+    const db = await openSBDB();
+    const tx = db.transaction(STORE_CREATURES, "readwrite");
+    const store = tx.objectStore(STORE_CREATURES);
+    store.put({
+      id: key,
+      savedAt: Date.now(),
+      expiresAt: Date.now() + ttlMs,
+      data: JSON.parse(JSON.stringify(data)) // Deep clone to break Vue reactivity
+    });
+  } catch (err) {
+    console.error("DB Write Error:", err);
+  }
+}
+
+async function readCreatureDB(key) {
+  try {
+    const db = await openSBDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_CREATURES, "readonly");
+      const store = tx.objectStore(STORE_CREATURES);
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const res = request.result;
+        if (res && Date.now() < res.expiresAt) resolve(res.data);
+        else resolve(null);
+      };
+      request.onerror = () => resolve(null);
+    });
+  } catch { return null; }
 }
