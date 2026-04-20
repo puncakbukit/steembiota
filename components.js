@@ -3867,8 +3867,16 @@ const BreedingPanelComponent = {
             <span v-if="genomeB" class="sb-sex-badge-abs" :class="genomeB.SX === 0 ? 'sb-sex-male' : 'sb-sex-female'">{{ parentBSex }}</span>
           </div>
 
-          <button @click="breedCreatures" :disabled="loading" class="sb-btn-breed">
-            {{ loading ? "Checking…" : "🔬 Breed" }}
+          <!-- FIX 3 (Kinship Deadlock): Disable the Breed button while a background
+               kinship check is already running (kinshipPreview === 'checking').
+               Without this guard, clicking Breed during the 800ms debounce window
+               triggers a second full ancestor walk — doubling RPC load and creating
+               a race condition where loadStatus can be overwritten mid-flight. -->
+          <button @click="breedCreatures"
+            :disabled="loading || kinshipPreview === 'checking'"
+            :title="kinshipPreview === 'checking' ? 'Kinship check in progress — please wait…' : ''"
+            class="sb-btn-breed">
+            {{ loading ? 'Checking…' : kinshipPreview === 'checking' ? '🔬 Verifying…' : '🔬 Breed' }}
           </button>
         </div>
 
@@ -4116,7 +4124,36 @@ const TransferPanelComponent = {
         this.$emit("notify", "Steem Keychain is not installed.", "error");
         return;
       }
+
+      // FIX 8 (Transfer Handshake): Verify the recipient account exists on-chain
+      // BEFORE publishing the offer.  If the user typos the name (e.g. @hubbit vs
+      // @hibbit) the creature gets permanently locked in "Pending Transfer" state
+      // until the owner manually cancels — a very poor UX.  A getAccounts call
+      // costs ~100ms and prevents this entire class of stuck-creature bugs.
       this.publishing = true;
+      try {
+        const accounts = await new Promise((resolve, reject) => {
+          steem.api.getAccounts([to], (err, res) =>
+            err ? reject(err) : resolve(res)
+          );
+        });
+        if (!accounts || accounts.length === 0 || accounts[0]?.name !== to) {
+          this.$emit("notify",
+            `@${to} does not exist on Steem. Please double-check the username.`,
+            "error"
+          );
+          this.publishing = false;
+          return;
+        }
+      } catch (e) {
+        this.$emit("notify",
+          "Could not verify recipient account — check your connection and try again.",
+          "error"
+        );
+        this.publishing = false;
+        return;
+      }
+
       publishTransferOffer(
         this.username,
         this.creatureAuthor,
@@ -4496,6 +4533,10 @@ const EquipPanelComponent = {
     creatureName:     { type: String, default: "" },
     wearings:         { type: Array,  default: () => [] },
     isOwner:          { type: Boolean, default: false },
+    // FIX 6 (Fossil Blind-Spot): Passed from CreatureView so the panel can
+    // suppress the "Equip" form while still showing worn items with a Remove
+    // button — allowing owners to retrieve accessories from fossilised creatures.
+    fossil:           { type: Boolean, default: false },
   },
   emits: ["notify", "wearings-updated"],
 
@@ -4509,23 +4550,41 @@ const EquipPanelComponent = {
       previewError:  "",
 
       // --- CLOSET ---
-      closetSearch: "",
-      closet:        [],
-      loadingCloset: false
+      closetSearch:       "",
+      closet:             [],
+      loadingCloset:      false,
+      // FIX 1 (Closet Performance): Limit initial render to 20 items.
+      // Each AccessoryCanvasComponent allocates a 2D canvas backing store on the GPU.
+      // Mounting 100+ simultaneously causes GPU memory exhaustion and severe jank
+      // on mobile. We slice the filtered list to closetVisibleCount and expose a
+      // "Load More" button that extends the window in increments of 20.
+      closetVisibleCount: 20,
     };
   },
 
   computed: {
     hasWearings() { return this.wearings.length > 0; },
     lapsingWearings() { return this.wearings.filter(w => w.permissionLapsed); },
-    filteredCloset() {
+    // FIX 1: _allFilteredCloset holds the complete search-filtered list (used for
+    // the "Load More" badge count).  filteredCloset is the sliced visible window —
+    // the one the template v-for iterates, which caps instantiated canvases at 20.
+    _allFilteredCloset() {
       if (!this.closetSearch) return this.closet;
       const q = this.closetSearch.toLowerCase();
-      return this.closet.filter(i => 
-        i.name.toLowerCase().includes(q) || 
+      return this.closet.filter(i =>
+        i.name.toLowerCase().includes(q) ||
         i.template.toLowerCase().includes(q)
       );
-    }
+    },
+    filteredCloset() {
+      return this._allFilteredCloset.slice(0, this.closetVisibleCount);
+    },
+    closetHasMore() {
+      return this._allFilteredCloset.length > this.closetVisibleCount;
+    },
+    closetHiddenCount() {
+      return Math.max(0, this._allFilteredCloset.length - this.closetVisibleCount);
+    },
   },
 
   watch: {
@@ -4535,12 +4594,33 @@ const EquipPanelComponent = {
     },
     expanded(isExpanded) {
       if (isExpanded && this.username) this.loadCloset();
-    }
+    },
+    // FIX 4 (Ghost Accessory State): Reset all transient equip-panel UI when the
+    // user navigates from one creature to another. Without this, a "Success" notif
+    // or accessory preview from Creature A lingers visually on Creature B's page.
+    creaturePermlink(newVal, oldVal) {
+      if (newVal === oldVal) return;
+      this.expanded           = false;
+      this.accUrlInput        = "";
+      this.previewAcc         = null;
+      this.previewError       = "";
+      this.closet             = [];
+      this.closetVisibleCount = 20;
+      this.closetSearch       = "";
+    },
+    // FIX 1: Reset visible window whenever the search query changes so that
+    // typing a new filter always starts from the first page of results.
+    closetSearch() {
+      this.closetVisibleCount = 20;
+    },
   },
 
   methods: {
     async loadCloset() {
       this.loadingCloset = true;
+      // FIX 1: Reset visible window each time the closet is (re)loaded so a
+      // returning user doesn't inherit a stale large window from a previous session.
+      this.closetVisibleCount = 20;
       try {
         const items = await fetchAccessoriesOwnedBy(this.username);
 
@@ -4558,13 +4638,26 @@ const EquipPanelComponent = {
       this.loadingCloset = false;
     },
 
+    // FIX 1: Expose 20 more closet items per click.
+    loadMoreCloset() {
+      this.closetVisibleCount += 20;
+    },
+
     selectFromCloset(item) {
       this.accUrlInput = `https://steemit.com/@${item.author}/${item.permlink}`;
       this.checkAccessory();
     },
 
+    // FIX 5 (Zero-Width Space Trap): Strip hidden Unicode characters and trailing
+    // query params/fragments before parsing.  Some Steem front-ends append
+    // ?node=... or trailing slashes when the user copies a URL from the address bar.
+    // The old \s*$ anchor rejected any URL with a trailing param, silently breaking
+    // the equip flow.  The new regex finds the FIRST @author/permlink match anywhere
+    // in the string, so extra suffixes are ignored rather than causing a hard error.
     parseAccUrl(raw) {
-      const m = raw.trim().match(/@([a-z0-9.-]+)\/([a-z0-9-]+)\s*$/i);
+      // Remove zero-width spaces (U+200B–U+200D, U+FEFF) that clipboard sometimes injects.
+      const cleaned = raw.trim().replace(/[\u200B-\u200D\uFEFF]/g, '');
+      const m = cleaned.match(/@([a-z0-9.-]+)\/([a-z0-9-]+)/i);
       if (!m) throw new Error("Cannot parse accessory URL");
       return {
         author: m[1].toLowerCase(),
@@ -4680,6 +4773,22 @@ const EquipPanelComponent = {
       );
     },
 
+    // FIX 2 (Z-Order): Let the owner reorder accessory layers.
+    // The wearings array index determines draw order in _normalizedWearings().
+    // Moving an item earlier in the array brings it visually forward (drawn last = on top).
+    moveWearingUp(index) {
+      if (index === 0) return;
+      const ws = [...this.wearings];
+      [ws[index - 1], ws[index]] = [ws[index], ws[index - 1]];
+      this.$emit('wearings-updated', ws);
+    },
+    moveWearingDown(index) {
+      if (index >= this.wearings.length - 1) return;
+      const ws = [...this.wearings];
+      [ws[index], ws[index + 1]] = [ws[index + 1], ws[index]];
+      this.$emit('wearings-updated', ws);
+    },
+
     async removeAccessory(w) {
       if (!window.steem_keychain) return;
 
@@ -4731,11 +4840,21 @@ const EquipPanelComponent = {
           <span class="sb-worn-count">{{ wearings.length }}</span>
         </div>
         <div class="sb-worn-list">
-          <div v-for="w in wearings" :key="w.accAuthor+'/'+w.accPermlink" class="sb-worn-item">
+          <div v-for="(w, wi) in wearings" :key="w.accAuthor+'/'+w.accPermlink" class="sb-worn-item">
             <accessory-canvas-component :template="w.template" :genome="w.genome" :canvas-w="80" :canvas-h="64" />
             <div class="sb-worn-item-info">
               <div class="sb-worn-item-name">{{ w.accName }}</div>
               <div v-if="w.permissionLapsed" class="sb-worn-lapsed">⚠ Lapsed</div>
+            </div>
+            <!-- FIX 2 (Z-Order): Layer reorder controls. "Up" = drawn later = visually on top.
+                 The first item in the array is rendered last, so it appears in front. -->
+            <div v-if="isOwner && wearings.length > 1" style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">
+              <button @click="moveWearingUp(wi)" :disabled="wi === 0 || publishing"
+                title="Move layer forward (draw on top)"
+                style="font-size:10px;padding:1px 5px;background:#111;color:#888;border:1px solid #2a2a2a;">▲</button>
+              <button @click="moveWearingDown(wi)" :disabled="wi === wearings.length - 1 || publishing"
+                title="Move layer backward (draw behind)"
+                style="font-size:10px;padding:1px 5px;background:#111;color:#888;border:1px solid #2a2a2a;">▼</button>
             </div>
             <button v-if="isOwner" @click="removeAccessory(w)" :disabled="publishing">👚 Remove</button>
           </div>
@@ -4743,7 +4862,17 @@ const EquipPanelComponent = {
       </div>
 
       <!-- EQUIP -->
-      <template v-if="isOwner && username">
+      <!-- FIX 6 (Fossil Blind-Spot): Hide the full equip form for fossilised creatures.
+           Fossils can no longer equip new accessories, but the owner can still Remove
+           accessories that were worn at time of death to return them to their closet.
+           Show a clear explanation instead of a confusing "Equip" toggle that would
+           silently fail or show a scary "Force Unequip" as the only recovery option. -->
+      <div v-if="fossil && isOwner" class="sb-fossil-equip-notice"
+        style="margin:10px 0;padding:10px 14px;border-radius:8px;background:#111;border:1px solid #2a2a2a;font-size:0.80rem;color:#666;">
+        🦴 This creature is a fossil. New accessories cannot be equipped.<br>
+        <span style="color:#80cbc4;">You can still remove worn accessories above to retrieve them.</span>
+      </div>
+      <template v-if="isOwner && username && !fossil">
         <div @click="expanded=!expanded" class="sb-equip-toggle">
           🧢 Equip an Accessory {{ expanded ? "▲" : "▼" }}
         </div>
@@ -4763,6 +4892,13 @@ const EquipPanelComponent = {
                 <div style="font-size:10px;color:#888;">{{ item.name }}</div>
               </div>
             </div>
+            <!-- FIX 1: Load More button — only rendered when the full filtered list
+                 exceeds the current visible window. Tapping it extends the slice by 20,
+                 instantiating only the next page of canvases rather than all at once. -->
+            <button v-if="closetHasMore" @click="loadMoreCloset"
+              style="margin-top:8px;width:100%;font-size:11px;background:#111;color:#888;border:1px solid #2a2a2a;">
+              ⬇ Load {{ closetHiddenCount }} more…
+            </button>
           </div>
 
           <!-- INPUT -->
@@ -4777,7 +4913,7 @@ const EquipPanelComponent = {
             <button @click="equipAccessory" :disabled="publishing">🧢 Equip</button>
           </div>
         </div>
-      </template>
+      </template><!-- end v-if isOwner && username && !fossil -->
     </div>
   `
 };
