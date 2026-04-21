@@ -431,6 +431,12 @@ function invalidateAccessoryCache(author, permlink) {
 }
 
 function parseSteembiotaPosts(rawPosts) {
+  // BUG FIX 4: Effective Ownership in the Home Feed Grid.
+  // The bulk parser never scanned replies for transfers (too expensive), so
+  // transferred creatures always showed the original author on the front page.
+  // Fix: read the per-post _effectiveOwner annotation written by patchListCacheOwner()
+  // (which is called on the detail page whenever a transfer is confirmed) and surface
+  // the "🤝 Transferred" badge in the grid without any extra network calls.
   const results = [];
   for (const p of rawPosts) {
     let meta = {};
@@ -438,6 +444,9 @@ function parseSteembiotaPosts(rawPosts) {
     if (!meta.steembiota || !meta.steembiota.genome) continue;
     const sb  = meta.steembiota;
     const age = calculateAge(p.created);   // live age — days since post was published
+    // _effectiveOwner is injected by patchListCacheOwner() when a transfer is confirmed
+    // on the detail page; fall back to the post author when absent.
+    const effectiveOwner = p._effectiveOwner || p.author;
     results.push({
       author:         p.author,
       permlink:       p.permlink,
@@ -455,7 +464,8 @@ function parseSteembiotaPosts(rawPosts) {
       originalAuthor:   null,
       originalPermlink: null,
       originalCreated:  null,
-      created:        p.created || ""
+      created:        p.created || "",
+      effectiveOwner,
     });
   }
   results.sort((a, b) => (b.created > a.created ? 1 : -1));
@@ -1469,7 +1479,11 @@ const HomeView = {
           <h3 class="sb-section-title">Genome</h3>
           <genome-table-component :genome="genome"></genome-table-component>
           <h3 class="sb-section-title">Unicode Render</h3>
-          <pre :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
+          <!-- FIX 3A (A11y): aria-hidden hides the box-drawing chars from screen readers
+               (which would read "Box drawings light vertical…" for each glyph).
+               The visually-hidden span provides a concise description instead. -->
+          <span class="sb-sr-only">Unicode art representation of the creature genome</span>
+          <pre aria-hidden="true" :style="fossil ? { color:'#444', opacity:'0.6' } : {}">{{ unicodeArt }}</pre>
           <div class="sb-post-title-wrap">
             <label class="sb-form-label">Post title</label>
             <input v-model="customTitle" type="text" maxlength="255" class="sb-input-full"/>
@@ -2074,7 +2088,15 @@ const CreatureView = {
     return {
       loading:       true,
       loadError:     null,
-      activeTab: 'interact', // Default tab
+      // FIX 4B (Tab State Navigation): Read the initial tab from the URL query param
+      // (?tab=stats) so that "Back" navigation and shared links restore the correct tab.
+      // Without this, navigating from Creature A's "Stats" tab to Creature B always
+      // reset to "Interact", breaking the expected browser-back behavior.
+      activeTab: (() => {
+        const valid = ['interact','lineage','stats','mgmt','social'];
+        const q = new URLSearchParams(window.location.hash.split('?')[1] || '').get('tab');
+        return valid.includes(q) ? q : 'interact';
+      })(),
       isPhantom:     false,   // true when post was tombstoned via delete_comment
       genome:        null,
       name:          null,
@@ -2123,6 +2145,10 @@ const CreatureView = {
       wearings:            [],
       // Incremented each time loadCreature() starts; used to cancel stale background fetches.
       _loadGeneration:     0,
+      // BUG FIX 7: Mobile canvas deadlock — tracks whether any action panel (Feed,
+      // activity tabs, vote picker, etc.) is open on top of the canvas so we can
+      // block canvas pointer events while the user interacts with those panels.
+      actionPanelOpen:     false,
     };
   },
   created() {
@@ -2134,10 +2160,37 @@ const CreatureView = {
   // → /@a/post2).  created() only fires on first mount, so clicking a Child or
   // Sibling in the Kinship Panel changed the URL but left stale content on screen.
   // The watcher detects the permlink change and reloads the creature explicitly.
+  //
+  // BUG FIX 2: Ghost Data on author-only navigation.
+  // On Steem, permlinks are unique per author, not globally.  @alice/creature-one
+  // and @bob/creature-one are entirely different posts.  The old watcher only
+  // observed $route.params.permlink, so navigating from @alice/creature-one to
+  // @bob/creature-one (identical permlink, different author) left Alice's data
+  // on screen with Bob's URL in the address bar.
+  // Fix: watch the entire params object with deep:true so any param change
+  // (author OR permlink) triggers a reload.
   watch: {
-    '$route.params.permlink': {
-      handler() { this.loadCreature(); },
+    '$route.params': {
+      handler() {
+        // FIX 4B: On creature navigation, read the tab from the new URL (or default).
+        const valid = ['interact','lineage','stats','mgmt','social'];
+        const q = new URLSearchParams(window.location.hash.split('?')[1] || '').get('tab');
+        this.activeTab = valid.includes(q) ? q : 'interact';
+        this.loadCreature();
+      },
+      deep: true,
       immediate: false
+    },
+    // FIX 4B: Push tab changes into the URL hash so Back/Forward and shared links
+    // restore the correct tab.  We use replaceState to avoid polluting history for
+    // every single tab click — only navigating to a different creature is a new entry.
+    activeTab(tab) {
+      const hash  = window.location.hash.split('?')[0];
+      const query = tab !== 'interact' ? `?tab=${tab}` : '';
+      const newHash = hash + query;
+      if (window.location.hash !== newHash) {
+        history.replaceState(null, '', window.location.pathname + newHash);
+      }
     }
   },
   mounted() {
@@ -2161,6 +2214,12 @@ const CreatureView = {
     fossil() {
       if (!this.genome) return false;
       return (this.postAge ?? 0) >= this.genome.LIF + (this.feedState ? this.feedState.lifespanBonus : 0);
+    },
+    // BUG FIX 7: Returns true whenever an overlapping UI panel is open so the
+    // canvas applies pointer-events:none, preventing the bobbing creature from
+    // intercepting taps intended for buttons below it on small screens.
+    canvasInteractionsBlocked() {
+      return this.actionPanelOpen || this.votePickerOpen;
     },
     unicodeArt()       { return this.genome ? buildUnicodeArt(this.genome, this.postAge ?? 0, this.feedState, this.facingRight, this.currentPose || "standing") : ""; },
     steemitUrl()       {
@@ -2850,6 +2909,15 @@ const CreatureView = {
             <span style="font-size:0.85rem;color:#aaa;">
               Age: <strong style="color:#eee;">{{ postAge }} day{{ postAge === 1 ? '' : 's' }}</strong>
             </span>
+            <!-- FIX 3B (Color-Only Fertility): Add an explicit "Fertile Now" text badge so
+                 color-blind users aren't reliant on the pinkish #f48fb1 Young Adult color or
+                 the 🌸 icon alone to determine whether the creature is currently breedable. -->
+            <span v-if="isFertile && !fossil"
+              style="font-size:0.78rem;font-weight:bold;color:#f48fb1;background:#1a0010;
+                     border:1px solid #880e4f;border-radius:12px;padding:2px 10px;"
+              role="status" aria-live="polite"
+              title="This creature is currently in its fertile window and can be used for breeding"
+            >🌸 Fertile Now</span>
             <span v-if="lifecycleStage"
               :style="{ fontSize:'0.82rem', fontWeight:'bold', color:lifecycleStage.color,
                         border:'1px solid '+lifecycleStage.color, borderRadius:'12px', padding:'2px 10px' }"
@@ -2930,6 +2998,7 @@ const CreatureView = {
           :anticipate-trigger="anticipateTrigger"
           :wearing="wearing"
           :wearings="wearings"
+          :interactions-blocked="canvasInteractionsBlocked"
           @facing-resolved="onFacingResolved"
           @pose-resolved="onPoseResolved"
         ></creature-canvas-component>
@@ -2954,7 +3023,9 @@ const CreatureView = {
          </div>
 
          <!-- Tab Content -->
-         <div v-show="activeTab === 'interact'">
+         <div v-show="activeTab === 'interact'"
+              @pointerenter="actionPanelOpen = true"
+              @pointerleave="actionPanelOpen = false">
 
         <!-- ── Worn Accessories + Equip Panel ── -->
         <!-- FIX 6: Pass :fossil so the panel can suppress the Equip form
@@ -4295,6 +4366,7 @@ vueApp.component("UserProfileComponent",        UserProfileComponent);
 vueApp.component("LoadingSpinnerComponent",     LoadingSpinnerComponent);
 vueApp.component("CreatureCanvasComponent",     CreatureCanvasComponent);
 vueApp.component("AccessoryCanvasComponent",    AccessoryCanvasComponent);
+vueApp.component("ClosetThumbComponent",        ClosetThumbComponent);  // FIX 2A: static img thumbnail
 vueApp.component("AccessoryCardComponent",      AccessoryCardComponent);
 vueApp.component("WearPanelComponent",          WearPanelComponent);
 vueApp.component("EquipPanelComponent",         EquipPanelComponent);

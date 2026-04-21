@@ -175,6 +175,12 @@ const CreatureCanvasComponent = {
     wearing:         { type: Object,  default: null  },
     // Multiple accessories currently worn (new API).
     wearings:        { type: Array,   default: () => [] },
+    // BUG FIX 7: Mobile Canvas Deadlock.
+    // When action panels (Feed, Walk, etc.) are open on small screens, the bobbing
+    // creature canvas intercepts touch events aimed at buttons positioned below it.
+    // Set interactionsBlocked:true while any such panel is open to apply
+    // pointer-events:none and lower the canvas z-index so buttons take priority.
+    interactionsBlocked: { type: Boolean, default: false },
   },
   emits: ["facing-resolved", "pose-resolved", "clicked"],
   data() {
@@ -335,10 +341,15 @@ const CreatureCanvasComponent = {
       this._dpr = dpr;
     },
     _normalizedWearings() {
+      // BUG FIX 3: Zombie Accessory — filter out items where the accessory owner
+      // has revoked the permission (permissionLapsed === true).  Without this filter
+      // a revoked accessory continued to render on the creature indefinitely because
+      // the draw loop had no visibility into the lapsed state.  A "⚠ Lapsed" badge
+      // is still shown in the Equip panel so the owner knows to click Remove.
       if (Array.isArray(this.wearings) && this.wearings.length) {
-        return this.wearings.filter(w => w && w.genome && w.template !== "shirt");
+        return this.wearings.filter(w => w && w.genome && w.template !== "shirt" && !w.permissionLapsed);
       }
-      return (this.wearing && this.wearing.genome && this.wearing.template !== "shirt")
+      return (this.wearing && this.wearing.genome && this.wearing.template !== "shirt" && !this.wearing.permissionLapsed)
         ? [this.wearing]
         : [];
     },
@@ -1073,6 +1084,13 @@ const CreatureCanvasComponent = {
     _drawAccessoryOnCreature(ctx, p, sc, ox, oy, pt, W, H, accessory, opts = {}) {
       if (!accessory || !accessory.genome) return;
       const { template, genome: ag } = accessory;
+      // BUG FIX 5: "Shirt" was listed as a valid template in some older versions of
+      // ACCESSORY_TEMPLATES but the renderer has never supported it.  The guard below
+      // (and the dead switch/scale cases further down) prevented shirts from appearing,
+      // but users could still create them, leaving a permanently invisible accessory.
+      // The fix is two-part: (a) remove "shirt" from ACCESSORY_TEMPLATES so it is no
+      // longer creatable (done in accessories.js), and (b) keep this early-return as a
+      // defensive fallback in case any legacy shirt genome is still in the wild.
       if (template === 'shirt') return;
       const underlayNecklace = !!opts.underlayNecklace;
 
@@ -1159,11 +1177,26 @@ const CreatureCanvasComponent = {
           anchorY = headY - hR * 1.05;
       }
 
-      // Render the accessory into an off-screen canvas
-      const offscreen = document.createElement('canvas');
-      offscreen.width  = accW;
-      offscreen.height = accH;
-      const offCtx = offscreen.getContext('2d');
+      // Render the accessory into an off-screen canvas.
+      // BUG FIX 1: Reuse a single offscreen canvas per component instance instead
+      // of allocating a new HTMLCanvasElement + 2D context on every frame.
+      // At 60 fps this was exhausting GPU context limits and causing "context lost"
+      // errors / tab crashes.  We only recreate (or resize) the canvas when accW or
+      // accH actually changes.
+      if (!this._offscreenCanvas) {
+        this._offscreenCanvas = document.createElement('canvas');
+        this._offscreenCanvas.width  = accW;
+        this._offscreenCanvas.height = accH;
+        this._offscreenCtx = this._offscreenCanvas.getContext('2d');
+      } else if (this._offscreenCanvas.width !== accW || this._offscreenCanvas.height !== accH) {
+        this._offscreenCanvas.width  = accW;
+        this._offscreenCanvas.height = accH;
+        // getContext() returns the same cached context after resize; no need to re-assign.
+      }
+      const offscreen = this._offscreenCanvas;
+      const offCtx    = this._offscreenCtx;
+      // Clear the reused canvas before each draw to avoid ghosting from previous accessories.
+      offCtx.clearRect(0, 0, accW, accH);
       // drawAccessory is defined in accessories.js (loaded before components.js)
       if (typeof drawAccessory === 'function') {
         drawAccessory(offCtx, template, ag, accW, accH, { transparentBackground: true, isWorn: true });
@@ -2570,7 +2603,11 @@ _drawEar(ctx, p, sc, headX, headY, hue, sat, lit, side, front) {
           ? 'Fossilised creature — ' + (genome.SX === 0 ? 'male' : 'female') + ', genome preserved on-chain'
           : 'A ' + (genome.SX === 0 ? 'male' : 'female') + ' creature, ' + (feedState ? feedState.label : '') + ' — click to interact')
       : 'Creature canvas loading'"
-    :style="'width:'+canvasW+'px;height:'+canvasH+'px;max-width:100%;' + (fossil || !genome ? 'cursor:default;' : 'cursor:pointer;') + '-webkit-tap-highlight-color:transparent;outline:none;user-select:none;'"
+    :style="'width:'+canvasW+'px;height:'+canvasH+'px;max-width:100%;'
+      + (fossil || !genome ? 'cursor:default;' : 'cursor:pointer;')
+      + '-webkit-tap-highlight-color:transparent;outline:none;user-select:none;'
+      + 'touch-action:pan-y;'
+      + (interactionsBlocked ? 'pointer-events:none;z-index:0;' : 'z-index:1;')"
     @click="onCanvasClick"></canvas>`
 };
 
@@ -2583,7 +2620,12 @@ const CreatureCardComponent = {
   components: { CreatureCanvasComponent },
   props: {
     post:     { type: Object, required: true },
-    username: { type: String, default: "" }
+    username: { type: String, default: "" },
+    // FIX 1A (Pending Transfer Badge): When the creature has an open transfer offer,
+    // show a 🤝 Pending badge directly on the card so owners can see at a glance
+    // which of their creatures are locked in a handshake — without clicking into
+    // each detail page.  Pass transferState.pendingOffer (or null) from the parent.
+    pendingOffer: { type: Object, default: null }
   },
   data() {
     return {
@@ -2735,7 +2777,18 @@ const CreatureCardComponent = {
           style="display:block;margin:0 auto;"
         ></creature-canvas-component>
 
-        <div class="sb-card-name">🧬 {{ post.name }}</div>
+        <div class="sb-card-name">
+          🧬 {{ post.name }}
+          <!-- FIX 1A: Show 🤝 Pending badge when creature has an open transfer offer.
+               Without this, the owner must click into each creature's detail page
+               to discover which items are locked in a pending handshake. -->
+          <span v-if="pendingOffer" title="Transfer offer pending — waiting for recipient to accept"
+            style="display:inline-block;margin-left:6px;font-size:0.68rem;
+                   background:#1a1200;color:#ffb74d;border:1px solid #3a2800;
+                   border-radius:4px;padding:1px 5px;vertical-align:middle;">
+            🤝 Pending → @{{ pendingOffer.to }}
+          </span>
+        </div>
 
         <!-- Row 1: sex · age · lifecycle · ❤️ count [↑] -->
         <div class="sb-card-row" @click.prevent.stop>
@@ -3495,6 +3548,19 @@ const BreedingPanelComponent = {
             loadGenomeFromPost(this.urlA.trim()),
             loadGenomeFromPost(trimmed),
           ]);
+          // FIX 1B (Genus Mismatch): Explicitly verify GEN matches before running
+          // the full ancestor walk.  Without this, pasting a URL for an incompatible
+          // genus would pass kinshipPreview silently and only fail at the final Breed
+          // button click — a confusing late-stage error that discards the user's work.
+          if (resA.genome.GEN !== resB.genome.GEN) {
+            const nameA = typeof generateGenusName === "function" ? generateGenusName(resA.genome.GEN) : `GEN ${resA.genome.GEN}`;
+            const nameB = typeof generateGenusName === "function" ? generateGenusName(resB.genome.GEN) : `GEN ${resB.genome.GEN}`;
+            throw new Error(
+              `Genus mismatch: Parent A is ${nameA} (GEN ${resA.genome.GEN}) ` +
+              `but Parent B is ${nameB} (GEN ${resB.genome.GEN}). ` +
+              `Both parents must be the same genus.`
+            );
+          }
           await checkBreedingCompatibility(resA, resB);
           this.kinshipPreview = "ok";
         } catch (e) {
@@ -4590,6 +4656,9 @@ const EquipPanelComponent = {
     fossil:           { type: Boolean, default: false },
   },
   emits: ["notify", "wearings-updated"],
+  // Note: ClosetThumbComponent is registered globally in app.js (vueApp.component).
+  // A local components: { ClosetThumbComponent } here would crash because accessories.js
+  // (where ClosetThumbComponent is defined) loads AFTER components.js in index.html.
 
   data() {
     return {
@@ -4780,9 +4849,24 @@ const EquipPanelComponent = {
     async equipAccessory() {
       if (!this.previewAcc || !window.steem_keychain) return;
 
-      this.publishing = true;
-
       const { accAuthor, accPermlink, accName } = this.previewAcc;
+      // FIX 4A (Double-Spend Accessory Trap): Use a module-level Set to track
+      // accessory IDs whose wear_on transaction is currently in-flight across ALL
+      // component instances (including other browser tabs via BroadcastChannel).
+      // The blockchain "is it busy?" check has a race condition: if the user has
+      // two tabs open for two different creatures, both can pass the check before
+      // the first Steem block confirms the transaction.  We mitigate this by
+      // disabling the Equip button for this accPermlink the moment we broadcast,
+      // and clearing it once the callback fires (success or failure).
+      const accKey = `${accAuthor}/${accPermlink}`;
+      if (!window._sbPendingEquips) window._sbPendingEquips = new Set();
+      if (window._sbPendingEquips.has(accKey)) {
+        this.$emit("notify", "A wear transaction for this accessory is already in progress — please wait.", "error");
+        return;
+      }
+      window._sbPendingEquips.add(accKey);
+
+      this.publishing = true;
 
       publishWearOn(
         this.username,
@@ -4794,6 +4878,7 @@ const EquipPanelComponent = {
         accName,
         (res) => {
           this.publishing = false;
+          window._sbPendingEquips && window._sbPendingEquips.delete(accKey);
 
           if (res.success) {
             this.$emit("notify", `🧢 ${accName} equipped!`, "success");
@@ -4913,15 +4998,24 @@ const EquipPanelComponent = {
       </div>
 
       <!-- EQUIP -->
-      <!-- FIX 6 (Fossil Blind-Spot): Hide the full equip form for fossilised creatures.
-           Fossils can no longer equip new accessories, but the owner can still Remove
-           accessories that were worn at time of death to return them to their closet.
-           Show a clear explanation instead of a confusing "Equip" toggle that would
-           silently fail or show a scary "Force Unequip" as the only recovery option. -->
+      <!-- BUG FIX 8 (Fossil Accessory Retrieval UX): Hide the full equip form for
+           fossilised creatures.  Fossils can no longer equip new accessories, but
+           the CURRENT OWNER (who may be a new owner after a transfer) can still
+           Remove accessories that were worn at time of death to return them to their
+           closet.  The notice now explicitly addresses the transfer case so a new
+           owner who received a fossil doesn't think their accessories are lost
+           forever — it calls out the "Remove" button above and explains that the
+           accessory will be returned to their closet after removal. -->
       <div v-if="fossil && isOwner" class="sb-fossil-equip-notice"
         style="margin:10px 0;padding:10px 14px;border-radius:8px;background:#111;border:1px solid #2a2a2a;font-size:0.80rem;color:#666;">
-        🦴 This creature is a fossil. New accessories cannot be equipped.<br>
-        <span style="color:#80cbc4;">You can still remove worn accessories above to retrieve them.</span>
+        🦴 This creature is a fossil — it can no longer wear new accessories.<br>
+        <span style="color:#80cbc4;">
+          Any accessories shown above are still equipped and can be retrieved.
+          Use the <strong style="color:#e0e0e0;">👚 Remove</strong> button next to each item to return it to your closet.
+        </span>
+        <span v-if="hasWearings" style="display:block;margin-top:6px;color:#ffb74d;">
+          ⚠ {{ wearings.length }} accessory{{ wearings.length !== 1 ? 'ies are' : ' is' }} currently trapped in this fossil — remove {{ wearings.length !== 1 ? 'them' : 'it' }} to recover {{ wearings.length !== 1 ? 'them' : 'it' }}.
+        </span>
       </div>
       <template v-if="isOwner && username && !fossil">
         <div @click="expanded=!expanded" class="sb-equip-toggle">
@@ -4938,8 +5032,13 @@ const EquipPanelComponent = {
             <div v-if="loadingCloset" class="sb-dimmer">Loading...</div>
             <div v-else-if="filteredCloset.length === 0" class="sb-closet-empty">No matching items...</div>
             <div v-else class="sb-closet-scroll">
+              <!-- FIX 2A (Closet Canvas Explosion): Use ClosetThumbComponent (static <img> via
+                   toDataURL) instead of AccessoryCanvasComponent (live GPU canvas) for each
+                   closet item.  At 60+ items the old approach exhausted mobile GPU context limits
+                   and caused silent canvas-lost errors.  The thumb renders once and discards the
+                   offscreen canvas immediately — zero GPU contexts remain active. -->
               <div v-for="item in filteredCloset" :key="item.permlink" @click="selectFromCloset(item)" style="cursor:pointer;text-align:center;">
-                <accessory-canvas-component :template="item.template" :genome="item.genome" :canvas-w="58" :canvas-h="46" />
+                <closet-thumb-component :template="item.template" :genome="item.genome" :canvas-w="58" :canvas-h="46" />
                 <div style="font-size:10px;color:#888;">{{ item.name }}</div>
               </div>
             </div>
@@ -4961,7 +5060,9 @@ const EquipPanelComponent = {
           <div v-if="previewAcc" style="margin-top:8px;">
             <accessory-canvas-component :template="previewAcc.template" :genome="previewAcc.genome" :canvas-w="80" :canvas-h="64" />
             <div class="sb-equip-preview-name">{{ previewAcc.accName }}</div>
-            <button @click="equipAccessory" :disabled="publishing">🧢 Equip</button>
+            <!-- FIX 4A: Also disable when accKey is in the session-level pending equips set -->
+            <button @click="equipAccessory"
+              :disabled="publishing || ($root._sbPendingEquips && $root._sbPendingEquips.has(previewAcc.accAuthor+'/'+previewAcc.accPermlink))">🧢 Equip</button>
           </div>
         </div>
       </template><!-- end v-if isOwner && username && !fossil -->
