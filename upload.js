@@ -396,9 +396,33 @@ function imageToGenome(img, rerollIndex = 0) {
   const masterSeed = (pixelHash ^ rerollIndex) >>> 0;
   const rng = makePrngFit(masterSeed);
 
+  // BUG FIX 6: Reroll Visual Variety.
+  // fitMor() is derived purely from the image's aspectRatio and fitHue() from
+  // dominantHue — both are locked to the image stats, so clicking "Reroll" only
+  // varied APP/ORN (jitter-based) while MOR and CLR stayed identical every time.
+  // Fix: on reroll (rerollIndex > 0), apply a small deterministic random offset to
+  // aspectRatio (±15 % of the detected value) and dominantHue (±25 °) so the body
+  // shape and colour palette shift visibly without completely ignoring the image.
+  // rerollIndex === 0 is always the "pure" image-faithful result so the first
+  // preview is unchanged; subsequent rerolls explore nearby genome space.
+  let effectiveRatio = stats.aspectRatio;
+  let effectiveHue   = stats.dominantHue;
+
+  if (rerollIndex > 0) {
+    // Offset range grows slightly with each reroll (capped at ×3) so early
+    // rerolls stay close to the image while later ones explore wider.
+    const strength = Math.min(rerollIndex, 3);
+    // rng() is already advanced past hue/mor usage below, so we consume two
+    // dedicated values here at the top of the RNG stream (before fitHue/fitMor).
+    const ratioOffset = (rng() - 0.5) * 2 * 0.15 * strength;  // ±15 % per unit
+    const hueOffset   = (rng() - 0.5) * 2 * 25   * strength;  // ±25 ° per unit
+    effectiveRatio = Math.max(0.5, effectiveRatio * (1 + ratioOffset));
+    effectiveHue   = ((effectiveHue + hueOffset) % 360 + 360) % 360;
+  }
+
   // Deterministic gene fitting using shared RNG stream
-  const { GEN, CLR } = fitHue(stats.dominantHue, rng);
-  const MOR           = fitMor(stats.aspectRatio); // already deterministic
+  const { GEN, CLR } = fitHue(effectiveHue, rng);
+  const MOR           = fitMor(effectiveRatio); // already deterministic
   const APP           = fitApp(stats.edgeDensity, rng);
   const ORN           = fitOrn(
     stats.colourfulness,
@@ -537,8 +561,15 @@ methods: {
       const img      = await loadImageFile(file);
       this.imageEl   = img;
 
-      // Run analysis on next tick so the UI shows "analysing…" first
-      await new Promise(r => setTimeout(r, 40));
+      // FIX 2B (Main-Thread Image Analysis): samplePixels() draws a potentially
+      // large image onto a 64×64 canvas and analysePixels() runs Sobel edge
+      // detection + HSL conversion — both are synchronous and can block the main
+      // thread for 200–500ms on large (10MB+) photos.  Wrapping them in a
+      // requestAnimationFrame allows the browser to commit the "Analysing…"
+      // spinner to the screen BEFORE the heavy work starts, so the UI doesn't
+      // appear frozen.  We then await a small setTimeout(0) after rAF to ensure
+      // the spinner paint has been flushed by the compositor.
+      await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
 
       const data   = samplePixels(img);
       const stats  = analysePixels(data, img.naturalWidth, img.naturalHeight);
